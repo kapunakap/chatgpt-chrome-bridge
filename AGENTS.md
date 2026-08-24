@@ -15,19 +15,19 @@ When working in this repo:
 7. Never echo `CONTROL_PLANE_API_KEY` or put its value in command-line arguments, source files, logs, issues, commits, or chat output.
 8. If a script fails, capture the command, exit code, and non-secret stdout/stderr. Do not improvise a new architecture.
 9. If OpenAI account/workspace permissions or a browser authentication step blocks progress, stop at that boundary and report the exact UI/permission needed.
-10. Do not declare success until `./scripts/status.sh` passes and the tunnel runtime reports running + healthy + ready.
+10. Do not declare success until `bash scripts/status.sh` passes and the tunnel runtime reports running + healthy + ready.
 
 ## Intended local flow
 
 ```bash
-./scripts/bootstrap-local.sh
+bash scripts/bootstrap-local.sh
 
 # Human/account boundary: obtain tunnel id + runtime key.
 export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
 export CONTROL_PLANE_API_KEY='...'
 
-./scripts/connect-tunnel.sh
-./scripts/status.sh
+bash scripts/connect-tunnel.sh
+bash scripts/status.sh
 ```
 
 After local success, the remaining ChatGPT-side task is connector selection and an end-to-end BrowserJack smoke test.
