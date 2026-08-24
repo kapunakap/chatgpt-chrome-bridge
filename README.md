@@ -1,10 +1,12 @@
 # chatgpt-browser-bridge
 
-Bridge ChatGPT web to the existing signed-in Chrome on this Mac by reusing OpenAI's installed Codex browser runtime.
+Primary goal: bridge ChatGPT web to the existing signed-in Chrome on this Mac by reusing OpenAI's installed Codex browser runtime.
 
-> **Current status — blocked upstream (2026-08-24):** OpenAI desktop app `26.818.61809` build `7019` fails macOS strict code-signature verification for the app and the browser/runtime executables BrowserJack depends on. Do not bypass this trust check. See [`KNOWN_BLOCKER.md`](KNOWN_BLOCKER.md) for evidence, upstream issues, and the resume criterion.
+> **Current local status — blocked upstream:** OpenAI desktop app `26.818.61809` build `7019` fails macOS strict code-signature verification for the app and the browser/runtime executables BrowserJack depends on. Do not bypass this trust check. See [`KNOWN_BLOCKER.md`](KNOWN_BLOCKER.md).
+>
+> **Temporary fallback:** Browserbase hosted MCP is prepared as a cloud-browser alternative. See [`BROWSERBASE.md`](BROWSERBASE.md). It does not control this Mac's Chrome profile.
 
-## Architecture
+## Preferred local architecture
 
 ```text
 ChatGPT web
@@ -16,13 +18,25 @@ ChatGPT web
   -> existing signed-in Chrome
 ```
 
-There is deliberately no public inbound port, custom reverse proxy, Browserbase session, second browser-automation extension, or fork of BrowserJack.
+There is deliberately no public inbound port, custom reverse proxy, second local browser-automation extension, or fork of BrowserJack.
+
+## Temporary Browserbase architecture
+
+```text
+ChatGPT web
+  -> Browserbase hosted MCP
+  -> Browserbase cloud Chromium
+  -> target website
+```
+
+Browserbase is a temporary fallback only; the preferred end state remains the local signed-in Chrome bridge.
 
 ## Source of truth
 
 - BrowserJack: https://github.com/stickerdaniel/browserjack
 - OpenAI tunnel-client: https://github.com/openai/tunnel-client
 - Tunnel end-user guide: https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md
+- Browserbase MCP: https://docs.browserbase.com/integrations/mcp/setup
 - OpenAI MCP developer-mode availability: https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt
 
 BrowserJack is pinned in this repo because it depends on undocumented OpenAI interfaces and compatibility is build-sensitive. `tunnel-client` is installed from OpenAI's official Homebrew tap.
@@ -43,7 +57,24 @@ Handles account authentication, creation/pasting of secrets, and product/workspa
 
 See `AGENTS.md` for the execution contract.
 
-## Prerequisites
+## Browserbase quick path
+
+While the local path is blocked:
+
+1. Follow [`BROWSERBASE.md`](BROWSERBASE.md).
+2. Obtain `BROWSERBASE_API_KEY` from Browserbase.
+3. Optionally validate the hosted MCP without creating a browser session:
+
+```bash
+export BROWSERBASE_API_KEY='...'
+python3 scripts/browserbase-mcp-smoke.py
+```
+
+4. Add the Browserbase hosted MCP URL to ChatGPT as a custom app if the workspace permits it.
+
+OpenAI currently documents full action-capable custom MCP support for Business and Enterprise/Edu, while Pro custom MCP access is limited to read/fetch. If Browserbase scans successfully but ChatGPT blocks `start`, `navigate`, or `act`, that is a ChatGPT entitlement boundary rather than a Browserbase transport failure.
+
+## Local prerequisites
 
 - macOS on Apple Silicon
 - official ChatGPT.app
@@ -121,7 +152,7 @@ Success requires both layers:
 
 Do not call the setup successful just because a process exists.
 
-## 5. Connect it in ChatGPT
+## 5. Connect the local path in ChatGPT
 
 Once the local runtime is ready, open:
 
@@ -129,34 +160,29 @@ https://chatgpt.com/#settings/Connectors
 
 Choose **Connection: Tunnel** and select/paste the same tunnel ID. Scan the MCP tools if the product asks you to do so.
 
-Final smoke test from ChatGPT:
+Final local-path smoke test from ChatGPT:
 
 1. invoke BrowserJack against `https://example.com`
 2. return the page title (`Example Domain`)
 3. perform one harmless browser interaction
 
-## Important entitlement gate
-
-A healthy tunnel only proves transport and MCP readiness. It does not guarantee that a ChatGPT plan/workspace permits an action-capable custom MCP.
-
-OpenAI's current help documentation says full MCP support including write/modify actions is available to Business and Enterprise/Edu, while Pro custom MCP access is limited to read/fetch. BrowserJack exposes a persistent `node_repl`, so if the ChatGPT workspace only permits read/fetch, expect browser clicks/typing to be blocked even though the local tunnel is healthy.
-
-Treat that as a product entitlement issue, not a reason to replace BrowserJack or the tunnel architecture.
-
 ## Operations
 
 ```bash
-# full status
+# full local status
 bash scripts/status.sh
 
 # signing/layout diagnostics
 bash scripts/diagnose-signing.sh
 bash scripts/diagnose-chatgpt-bundle.sh
 
-# stop the managed tunnel runtime
+# Browserbase hosted MCP tool scan (requires env key; no browser created)
+python3 scripts/browserbase-mcp-smoke.py
+
+# stop the managed local tunnel runtime
 bash scripts/stop.sh
 
-# reconnect after stopping
+# reconnect local path after stopping
 export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
 export CONTROL_PLANE_API_KEY='...'
 bash scripts/connect-tunnel.sh
@@ -170,10 +196,11 @@ tunnel-client runtimes --json status chatgpt-browser
 
 ## Security notes
 
-This bridge intentionally gives an AI tool access to an already-authenticated browser. Treat the MCP as highly privileged.
+Both architectures give an AI tool meaningful browser access. Treat the MCP as highly privileged.
 
 - Never commit API keys, cookies, exported browser state, or support bundles containing secrets.
 - Do not expose BrowserJack or its MCP over a public inbound port.
 - Never weaken or bypass OpenAI code-signature verification to make BrowserJack start.
+- Explicitly close Browserbase sessions when finished to limit cost and exposure.
 - BrowserJack relies on undocumented OpenAI interfaces and can stop working after a ChatGPT.app update; rerun `doctor --live` before changing architecture.
 - Browser content can contain prompt-injection text. Prefer explicit, scoped browser tasks and confirmation for consequential actions.
