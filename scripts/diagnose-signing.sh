@@ -52,22 +52,27 @@ codesign_check "cua node_repl" "$APP/Contents/Resources/cua_node/bin/node_repl"
 codesign_check "browser peer authorization" "$APP/Contents/Resources/native/browser-use-peer-authorization.node"
 codesign_check "codex code-mode host" "$APP/Contents/Resources/codex-code-mode-host"
 
-# BrowserJack currently expects exactly one bundled macOS Chrome native host.
-mapfile -t bundled_hosts < <(find "$PLUGIN_ROOT/extension-host/macos" -type f -perm -111 2>/dev/null | sort)
-if (( ${#bundled_hosts[@]} == 0 )); then
+# Inspect every bundled file in the macOS Chrome native-host directory. This is
+# intentionally discovery-only because current OpenAI builds may rename the host.
+bundled_host_found=0
+if [[ -d "$PLUGIN_ROOT/extension-host/macos" ]]; then
+  while IFS= read -r host; do
+    [[ -n "$host" ]] || continue
+    bundled_host_found=1
+    codesign_check "bundled Chrome native-host file" "$host"
+  done < <(find "$PLUGIN_ROOT/extension-host/macos" -type f 2>/dev/null | sort)
+fi
+if [[ "$bundled_host_found" -eq 0 ]]; then
   echo "=== BUNDLED CHROME NATIVE HOST ==="
   echo "present=false"
   echo
-else
-  for host in "${bundled_hosts[@]}"; do
-    codesign_check "bundled Chrome native host" "$host"
-  done
 fi
 
 echo "=== INSTALLED CHROME NATIVE HOST MANIFESTS ==="
 manifest_found=0
 if [[ -d "$MANIFEST_DIR" ]]; then
   while IFS= read -r manifest; do
+    [[ -n "$manifest" ]] || continue
     manifest_found=1
     printf 'manifest=%s\n' "$manifest" | redact_home
     python3 - "$manifest" <<'PY'
@@ -127,6 +132,7 @@ echo
 echo "=== LAYOUT METADATA FALLBACK CANDIDATE ==="
 if [[ -d "$MANIFEST_DIR" ]]; then
   while IFS= read -r manifest; do
+    [[ -n "$manifest" ]] || continue
     python3 - "$manifest" <<'PY'
 import json, re, sys
 try:
