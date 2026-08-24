@@ -3,6 +3,7 @@ set -euo pipefail
 
 BROWSERJACK_VERSION="0.3.0"
 BROWSERJACK_SHIM="$HOME/Library/Application Support/browserjack/bin/browserjack"
+CHATGPT_APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -13,6 +14,15 @@ printf '== chatgpt-browser-bridge local bootstrap ==\n'
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "BrowserJack requires macOS."
 [[ "$(uname -m)" == "arm64" ]] || fail "BrowserJack currently requires Apple Silicon (arm64)."
+[[ -d "$CHATGPT_APP" ]] || fail "OpenAI desktop app not found at $CHATGPT_APP. Set CHATGPT_APP_PATH only if you intentionally use another official app bundle."
+
+printf 'Verifying OpenAI desktop app signature before exposing its browser runtime...\n'
+if ! /usr/bin/codesign --verify --strict "$CHATGPT_APP" >/dev/null 2>&1; then
+  app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CHATGPT_APP/Contents/Info.plist" 2>/dev/null || true)"
+  app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$CHATGPT_APP/Contents/Info.plist" 2>/dev/null || true)"
+  fail "BLOCKED_UPSTREAM_OPENAI_SIGNATURE: $CHATGPT_APP version ${app_version:-unknown} build ${app_build:-unknown} fails macOS strict code-signature verification. Do not bypass this check. See OpenAI Codex issues #40025 and #40407; rerun after installing a corrected OpenAI build."
+fi
+printf 'OpenAI desktop app signature: valid\n'
 
 command -v brew >/dev/null 2>&1 || fail "Homebrew is required. Install Homebrew, then rerun this script."
 
@@ -60,4 +70,4 @@ tunnel-client help quickstart >/dev/null
 printf 'OK: tunnel-client quickstart help is available.\n'
 
 printf '\nBOOTSTRAP_OK=1\n'
-printf 'Next: obtain CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY, then run ./scripts/connect-tunnel.sh\n'
+printf 'Next: obtain CONTROL_PLANE_TUNNEL_ID and CONTROL_PLANE_API_KEY, then run bash scripts/connect-tunnel.sh\n'
