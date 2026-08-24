@@ -55,7 +55,7 @@ The bootstrap script verifies the local prerequisites rather than silently switc
 ## 1. Bootstrap the local browser bridge
 
 ```bash
-./scripts/bootstrap-local.sh
+bash scripts/bootstrap-local.sh
 ```
 
 This installs/validates:
@@ -91,7 +91,7 @@ In the shell where the runtime key is available:
 ```bash
 export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
 export CONTROL_PLANE_API_KEY='...'
-./scripts/connect-tunnel.sh
+bash scripts/connect-tunnel.sh
 ```
 
 The script uses OpenAI's supported managed-runtime path:
@@ -107,7 +107,7 @@ The runtime key is passed as the secret reference `env:CONTROL_PLANE_API_KEY`; i
 ## 4. Validate
 
 ```bash
-./scripts/status.sh
+bash scripts/status.sh
 ```
 
 Success requires both layers:
@@ -143,15 +143,15 @@ Treat that as a product entitlement issue, not a reason to replace BrowserJack o
 
 ```bash
 # full status
-./scripts/status.sh
+bash scripts/status.sh
 
 # stop the managed tunnel runtime
-./scripts/stop.sh
+bash scripts/stop.sh
 
 # reconnect after stopping
 export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
 export CONTROL_PLANE_API_KEY='...'
-./scripts/connect-tunnel.sh
+bash scripts/connect-tunnel.sh
 
 # BrowserJack diagnostics only
 "$HOME/Library/Application Support/browserjack/bin/browserjack" doctor --live --json
