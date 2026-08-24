@@ -2,6 +2,8 @@
 
 Bridge ChatGPT web to the existing signed-in Chrome on this Mac by reusing OpenAI's installed Codex browser runtime.
 
+> **Current status — blocked upstream (2026-08-24):** OpenAI desktop app `26.818.61809` build `7019` fails macOS strict code-signature verification for the app and the browser/runtime executables BrowserJack depends on. Do not bypass this trust check. See [`KNOWN_BLOCKER.md`](KNOWN_BLOCKER.md) for evidence, upstream issues, and the resume criterion.
+
 ## Architecture
 
 ```text
@@ -58,7 +60,9 @@ The bootstrap script verifies the local prerequisites rather than silently switc
 bash scripts/bootstrap-local.sh
 ```
 
-This installs/validates:
+The first bootstrap gate is now strict verification of the OpenAI desktop app. If the installed app signature is invalid, bootstrap stops immediately with `BLOCKED_UPSTREAM_OPENAI_SIGNATURE`; it does not install, patch, or launch around that failure.
+
+Once the signature gate passes, bootstrap installs/validates:
 
 1. BrowserJack `0.3.0` in runtime-only/plugin mode (no Claude registration)
 2. the stable BrowserJack shim at `~/Library/Application Support/browserjack/bin/browserjack`
@@ -145,6 +149,10 @@ Treat that as a product entitlement issue, not a reason to replace BrowserJack o
 # full status
 bash scripts/status.sh
 
+# signing/layout diagnostics
+bash scripts/diagnose-signing.sh
+bash scripts/diagnose-chatgpt-bundle.sh
+
 # stop the managed tunnel runtime
 bash scripts/stop.sh
 
@@ -166,5 +174,6 @@ This bridge intentionally gives an AI tool access to an already-authenticated br
 
 - Never commit API keys, cookies, exported browser state, or support bundles containing secrets.
 - Do not expose BrowserJack or its MCP over a public inbound port.
+- Never weaken or bypass OpenAI code-signature verification to make BrowserJack start.
 - BrowserJack relies on undocumented OpenAI interfaces and can stop working after a ChatGPT.app update; rerun `doctor --live` before changing architecture.
 - Browser content can contain prompt-injection text. Prefer explicit, scoped browser tasks and confirmation for consequential actions.
