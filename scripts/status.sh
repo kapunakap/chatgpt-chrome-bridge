@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ALIAS="${TUNNEL_ALIAS:-chatgpt-browser}"
-BROWSERJACK_SHIM="$HOME/Library/Application Support/browserjack/bin/browserjack"
+ALIAS="${TUNNEL_ALIAS:-local-chrome}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
-[[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack shim not found."
+[[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
 command -v tunnel-client >/dev/null 2>&1 || fail "tunnel-client not found."
 
 printf '== BrowserJack status ==\n'
