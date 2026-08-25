@@ -58,7 +58,14 @@ The scripts accept `TUNNEL_ALIAS`, `CONTROL_PLANE_TUNNEL_ID`, `CONTROL_PLANE_RUN
 
 ## ChatGPT setup
 
-Open ChatGPT connector settings, choose the existing **Local Chrome** tunnel, and scan/connect its MCP tools if requested.
+In ChatGPT, open **Plugins → Create app** and use:
+
+- Name: `Local Chrome`
+- Connection: `Tunnel`
+- Available tunnel: `local-chrome (tunnel_6a8d22f3a68c81918cac74c9d23f183c)`
+- Authentication: `No Auth`
+
+Accept the custom-MCP warning, create the plugin, and scan/connect its tools if requested.
 
 Final smoke request:
 
