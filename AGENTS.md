@@ -20,15 +20,12 @@ When working in this repo:
 ## Intended local flow
 
 ```bash
-bash scripts/bootstrap-local.sh
-
-# Human/account boundary: obtain tunnel id + runtime key.
-export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
-export CONTROL_PLANE_API_KEY='...'
-
 bash scripts/connect-tunnel.sh
 bash scripts/status.sh
+node scripts/browserjack-mcp-smoke.mjs
 ```
+
+The checked-in defaults use the existing `Local Chrome` tunnel and the protected runtime-key file at `~/.config/chatgpt-browser-bridge/runtime-api-key`. Never read or print that file.
 
 After local success, the remaining ChatGPT-side task is connector selection and an end-to-end BrowserJack smoke test.
 
