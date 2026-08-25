@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ALIAS="${TUNNEL_ALIAS:-chatgpt-browser}"
-BROWSERJACK_SHIM="$HOME/Library/Application Support/browserjack/bin/browserjack"
+ALIAS="${TUNNEL_ALIAS:-local-chrome}"
+TUNNEL_ID="${CONTROL_PLANE_TUNNEL_ID:-tunnel_6a8d22f3a68c81918cac74c9d23f183c}"
+RUNTIME_API_KEY_FILE="${CONTROL_PLANE_RUNTIME_API_KEY_FILE:-$HOME/.config/chatgpt-browser-bridge/runtime-api-key}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
-[[ -n "${CONTROL_PLANE_TUNNEL_ID:-}" ]] || fail "Set CONTROL_PLANE_TUNNEL_ID first."
-[[ "$CONTROL_PLANE_TUNNEL_ID" =~ ^tunnel_[a-z0-9]{32}$ ]] || fail "CONTROL_PLANE_TUNNEL_ID does not look like a tunnel_... id."
-[[ -n "${CONTROL_PLANE_API_KEY:-}" ]] || fail "Set CONTROL_PLANE_API_KEY to a runtime API key with Tunnels Read + Use."
+[[ "$TUNNEL_ID" =~ ^tunnel_[a-z0-9]{32}$ ]] || fail "Tunnel ID does not look like a tunnel_... id."
+[[ -f "$RUNTIME_API_KEY_FILE" && -s "$RUNTIME_API_KEY_FILE" ]] || fail "Runtime API key file is missing or empty: $RUNTIME_API_KEY_FILE"
+[[ "$(stat -f '%Su' "$RUNTIME_API_KEY_FILE")" == "$(id -un)" ]] || fail "Runtime API key file must be owned by the current user."
+[[ "$(stat -f '%Lp' "$RUNTIME_API_KEY_FILE")" == "600" ]] || fail "Runtime API key file permissions must be 600."
 command -v tunnel-client >/dev/null 2>&1 || fail "tunnel-client is not installed; run bash scripts/bootstrap-local.sh."
-[[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack shim not found; run bash scripts/bootstrap-local.sh."
+[[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
 
 printf '== Revalidating BrowserJack browser handshake ==\n'
 "$BROWSERJACK_SHIM" doctor --live --json
@@ -27,8 +31,8 @@ set +e
 connect_output="$({
   tunnel-client runtimes --json connect \
     --alias "$ALIAS" \
-    --tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
-    --runtime-api-key env:CONTROL_PLANE_API_KEY \
+    --tunnel-id "$TUNNEL_ID" \
+    --runtime-api-key "file:$RUNTIME_API_KEY_FILE" \
     --mcp-command "$MCP_COMMAND"
 } 2>&1)"
 connect_rc=$?
