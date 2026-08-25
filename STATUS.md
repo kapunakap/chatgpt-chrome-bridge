@@ -36,7 +36,6 @@ Evidence:
 
 Remaining ChatGPT-side action:
 
-1. In ChatGPT connector settings, select/connect the existing **Local Chrome** tunnel.
-2. Ask it to navigate to `https://example.com` and return `Example Domain`.
+The signed-in ChatGPT **New Plugin** form is prepared with `Local Chrome`, the `local-chrome` tunnel, `No Auth`, and the warning acknowledged. Click **Create**, then ask it to navigate to `https://example.com` and return `Example Domain`.
 
 No ChatGPT.app, Chrome extension/profile, global trust policy, or alternate browser architecture was modified.
