@@ -1,4 +1,5 @@
 # chatgpt-browser-bridge
+<img width="1672" height="941" alt="ChatGPT Image Aug 27, 2026, 01_50_55 AM" src="https://github.com/user-attachments/assets/6ddbd299-ef4a-4fad-941b-7b3864252e3d" />
 
 Bridges ChatGPT to the existing signed-in Chrome on this Mac through OpenAI's Secure MCP Tunnel and BrowserJack.
 
