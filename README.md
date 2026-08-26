@@ -1,43 +1,136 @@
-# chatgpt-browser-bridge
-<img width="1672" height="941" alt="ChatGPT Image Aug 27, 2026, 01_50_55 AM" src="https://github.com/user-attachments/assets/6ddbd299-ef4a-4fad-941b-7b3864252e3d" />
+# ChatGPT Browser Bridge
 
-Bridges ChatGPT to the existing signed-in Chrome on this Mac through OpenAI's Secure MCP Tunnel and BrowserJack.
+<img width="1672" height="941" alt="ChatGPT → Secure MCP Tunnel → Chrome on Personal Mac" src="https://github.com/user-attachments/assets/6ddbd299-ef4a-4fad-941b-7b3864252e3d" />
 
-## Current status
+Control your existing signed-in Chrome on your Mac from ChatGPT through OpenAI Secure MCP Tunnel and [BrowserJack](https://github.com/stickerdaniel/browserjack).
 
-`Local Chrome` is installed and locally verified:
-
-- tunnel alias: `local-chrome`
-- tunnel ID: `tunnel_6a8d22f3a68c81918cac74c9d23f183c`
-- BrowserJack command: `/Users/onin/dev/chatgpt-browser-bridge/scripts/browserjack-current.sh run`
-- durable BrowserJack runtime: `~/Library/Application Support/chatgpt-browser-bridge/browserjack/26.818.61809`
-- runtime API key reference: `file:/Users/onin/.config/chatgpt-browser-bridge/runtime-api-key`
-
-The key file is machine-local, must be owned by the current user, and must have mode `600`. Scripts never read or print its contents.
+This is an **unofficial, experimental bridge**. It opens no public inbound port, runs no hosted browser, and installs no extra browser extension. ChatGPT reaches a local stdio MCP server through OpenAI's official `tunnel-client`; BrowserJack then reuses the browser runtime already installed by the official ChatGPT/Codex desktop app.
 
 ## Architecture
 
 ```text
-ChatGPT web
-  -> OpenAI Secure MCP Tunnel "Local Chrome"
-  -> tunnel-client managed runtime on this Mac
+ChatGPT
+  -> OpenAI Secure MCP Tunnel
+  -> tunnel-client on your Mac
   -> BrowserJack stdio MCP
-  -> OpenAI Codex browser runtime
-  -> ChatGPT/Codex Chrome extension + native host
+  -> OpenAI browser runtime
   -> existing signed-in Chrome
 ```
 
-There is no public inbound port, reverse proxy, extra browser extension, or hosted browser.
+## Current compatibility
 
-## Operations
+The bridge is deliberately fail-closed to the OpenAI desktop build it has been verified against:
 
-Start or reconnect the managed runtime:
+- app version: `26.818.61809`
+- build: `7019`
+- bundle ID: `com.openai.codex`
+- OpenAI TeamIdentifier: `2DC432GLL2`
+- browser-client SHA-256: `53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766eb369b5e6`
+- Chrome native host: `com.openai.codexextension`
+- Chrome extension ID: `hehggadaopoacecdllhhajmbjkdcmajg`
+
+Any mismatch fails closed. ChatGPT/Codex desktop updates can therefore require a compatibility review before this bridge works again.
+
+BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing behavior used by this tested build. `scripts/prepare-browserjack.sh` builds a pinned BrowserJack checkout with the narrow compatibility adaptation used by this project. No OpenAI binary, extension, browser profile, or app bundle is modified or redistributed.
+
+## Requirements
+
+- macOS on Apple Silicon
+- official ChatGPT/Codex desktop app installed at `/Applications/ChatGPT.app`
+- the official ChatGPT/Codex Chrome integration already installed and working in Chrome
+- Homebrew
+- Node.js 22+ (the bootstrap script installs Homebrew `node@22` when needed)
+- an OpenAI Secure MCP Tunnel associated with your Platform organization and ChatGPT workspace
+- a runtime API key with **Tunnels Read + Use**, stored in a local mode-`600` file
+- ChatGPT developer mode / permission to create a custom app
+
+Official tunnel documentation: [OpenAI Secure MCP Tunnels](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+## 1. Provision the OpenAI tunnel
+
+Do this once in the OpenAI Platform organization you want to use:
+
+1. Open **OpenAI Platform → Tunnels** and create a tunnel.
+2. Associate it with the ChatGPT workspace where you will create the browser app.
+3. Copy the resulting `tunnel_...` ID.
+4. Create or use a runtime API key for a principal with **Tunnels Read + Use**.
+5. Store that key outside this repository and restrict it to your user.
+
+For example:
 
 ```bash
-bash scripts/connect-tunnel.sh
+mkdir -p "$HOME/.config/chatgpt-browser-bridge"
+chmod 700 "$HOME/.config/chatgpt-browser-bridge"
+umask 077
+cat > "$HOME/.config/chatgpt-browser-bridge/runtime-api-key"
+# paste the runtime API key, then press Ctrl-D
+chmod 600 "$HOME/.config/chatgpt-browser-bridge/runtime-api-key"
 ```
 
-Validate BrowserJack and require the runtime to be running, healthy, and ready:
+Never commit the key or paste it into GitHub issues, logs, screenshots, or shell commands that would expose the value in process arguments.
+
+## 2. Install the local bridge
+
+```bash
+git clone https://github.com/kapunakap/chatgpt-browser-bridge.git
+cd chatgpt-browser-bridge
+bash scripts/bootstrap-local.sh
+```
+
+The bootstrap installs/validates local prerequisites and builds the pinned BrowserJack compatibility runtime under:
+
+```text
+~/Library/Application Support/chatgpt-browser-bridge/browserjack/26.818.61809
+```
+
+It does not modify `ChatGPT.app`, Chrome, the OpenAI Chrome extension, or your browser profile.
+
+## 3. Start the tunnel
+
+Set your own tunnel ID and connect:
+
+```bash
+CONTROL_PLANE_TUNNEL_ID=tunnel_... bash scripts/connect-tunnel.sh
+```
+
+Optional overrides:
+
+- `TUNNEL_ALIAS` — default `local-chrome`
+- `CONTROL_PLANE_RUNTIME_API_KEY_FILE` — default `~/.config/chatgpt-browser-bridge/runtime-api-key`
+- `BROWSERJACK_COMMAND` — default `scripts/browserjack-current.sh`
+- `CHATGPT_APP_PATH` — default `/Applications/ChatGPT.app`
+- `BROWSERJACK_PATCHED_ROOT` — override the prepared BrowserJack runtime path
+
+The bridge waits until `tunnel-client` reports the managed runtime as running, healthy, and ready.
+
+## 4. Connect it in ChatGPT
+
+In ChatGPT:
+
+1. Open **Plugins → Create app**.
+2. Name it something like **Local Chrome**.
+3. Choose **Tunnel** as the connection type.
+4. Select the tunnel you provisioned above.
+5. Choose **No Auth** for the MCP app itself.
+6. Accept the custom-MCP warning and create/connect the app.
+
+Smoke test:
+
+```text
+Use Local Chrome to navigate my existing Chrome to https://example.com and return the page title.
+```
+
+Expected title: `Example Domain`.
+
+## Watch it working
+
+Follow the tunnel log in another terminal:
+
+```bash
+tail -f "$HOME/Library/Application Support/tunnel-client/logs/local-chrome.log"
+```
+
+Validate the local BrowserJack handshake and managed runtime:
 
 ```bash
 bash scripts/status.sh
@@ -55,42 +148,18 @@ Stop the managed runtime:
 bash scripts/stop.sh
 ```
 
-The scripts accept `TUNNEL_ALIAS`, `CONTROL_PLANE_TUNNEL_ID`, `CONTROL_PLANE_RUNTIME_API_KEY_FILE`, and `BROWSERJACK_COMMAND` overrides. Defaults point to the verified `Local Chrome` setup above.
+## Security
 
-## ChatGPT setup
+This bridge gives a remote AI client control of a browser that may already be authenticated to sensitive sites. Treat access to the ChatGPT app/workspace connection as equivalent to access to those browser sessions, and assume webpage content can attempt prompt injection.
 
-In ChatGPT, open **Plugins → Create app** and use:
-
-- Name: `Local Chrome`
-- Connection: `Tunnel`
-- Available tunnel: `local-chrome (tunnel_6a8d22f3a68c81918cac74c9d23f183c)`
-- Authentication: `No Auth`
-
-Accept the custom-MCP warning, create the plugin, and scan/connect its tools if requested.
-
-Final smoke request:
-
-> Use Local Chrome to navigate my existing Chrome to https://example.com and return the page title.
-
-Expected title: `Example Domain`.
-
-## Compatibility and trust
-
-BrowserJack 0.3.0 predates the browser runtime in ChatGPT/Codex app `26.818.61809` build `7019`. The local adapter is deliberately fail-closed to this exact observed runtime:
-
-- bundle ID `com.openai.codex`
-- OpenAI TeamIdentifier `2DC432GLL2`
-- browser-client SHA-256 `53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766eb369b5e6`
-- native host `com.openai.codexextension`
-- Chrome extension ID `hehggadaopoacecdllhhajmbjkdcmajg`
-- trusted service `browser-service.mjs` inside the verified Chrome plugin root
-
-The adapter preserves BrowserJack's app/cache byte-integrity and native-host identity checks. It does not modify or re-sign ChatGPT.app, Chrome, the extension, or the Chrome profile. An app update or hash change fails closed and requires a new review.
+The runtime API key stays in a local file and is passed to `tunnel-client` by file reference. The compatibility launcher checks the exact tested OpenAI app version/build, bundle ID, TeamIdentifier, browser-client hash, native-host identity, and extension identity before starting. See [SECURITY.md](SECURITY.md) for the full trust boundary and reporting guidance.
 
 ## Source projects
 
-- BrowserJack: https://github.com/stickerdaniel/browserjack
-- OpenAI tunnel-client: https://github.com/openai/tunnel-client
-- OpenAI Secure MCP Tunnel guide: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+- [BrowserJack](https://github.com/stickerdaniel/browserjack)
+- [OpenAI tunnel-client](https://github.com/openai/tunnel-client)
+- [OpenAI Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-Never commit API keys, cookies, browser profiles, tunnel profiles, logs, or machine authentication state.
+## License
+
+MIT. See [LICENSE](LICENSE).

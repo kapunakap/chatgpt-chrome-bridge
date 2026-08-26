@@ -1,34 +1,25 @@
 # AGENTS.md
 
-This repository is intentionally small. ChatGPT owns architecture and diagnosis; Codex is the local execution layer.
+Read `README.md` and `SECURITY.md` before changing this repository.
 
-## Codex contract
+## Project constraints
 
-When working in this repo:
+1. Keep the architecture narrow: ChatGPT -> OpenAI Secure MCP Tunnel -> local `tunnel-client` -> BrowserJack -> the existing OpenAI browser runtime -> the user's existing Chrome.
+2. Do not add a public inbound port, reverse proxy, hosted browser, or extra browser extension unless the user explicitly changes the architecture.
+3. Never commit API keys, cookies, browser profiles, tunnel support bundles, logs, machine authentication state, or concrete user tunnel IDs.
+4. Keep compatibility checks fail-closed. Unknown ChatGPT/Codex builds, hashes, native hosts, or extension identities must fail until explicitly reviewed.
+5. The tested-build constants in `scripts/prepare-browserjack.sh` and `scripts/browserjack-current.sh` are a matched set. Change them only from concrete local evidence and update both files together.
+6. Do not modify or redistribute OpenAI binaries, the ChatGPT/Codex app bundle, Chrome, its profile, or the OpenAI Chrome extension.
+7. Prefer checked-in scripts over ad-hoc command sequences.
+8. Do not declare local success until `bash scripts/status.sh` passes and the managed tunnel reports running + healthy + ready.
 
-1. Read `README.md` first.
-2. Do not replace BrowserJack, `tunnel-client`, or the architecture unless the user explicitly asks.
-3. Do not fork BrowserJack or tunnel-client just to work around a local setup failure.
-4. Prefer the checked-in scripts over hand-written command sequences.
-5. Do not add ngrok, Cloudflare Tunnel, Tailscale, reverse proxies, inbound firewall rules, Browserbase, Playwright MCP, Browser MCP, or another browser extension.
-6. Never commit secrets, cookies, browser profiles, API keys, tunnel support bundles, or machine-specific authentication state.
-7. Never echo `CONTROL_PLANE_API_KEY` or put its value in command-line arguments, source files, logs, issues, commits, or chat output.
-8. If a script fails, capture the command, exit code, and non-secret stdout/stderr. Do not improvise a new architecture.
-9. If OpenAI account/workspace permissions or a browser authentication step blocks progress, stop at that boundary and report the exact UI/permission needed.
-10. Do not declare success until `bash scripts/status.sh` passes and the tunnel runtime reports running + healthy + ready.
+## Static checks
 
-## Intended local flow
+Before proposing a change:
 
 ```bash
-bash scripts/connect-tunnel.sh
-bash scripts/status.sh
-node scripts/browserjack-mcp-smoke.mjs
+bash -n scripts/*.sh
+node --check scripts/browserjack-mcp-smoke.mjs
 ```
 
-The checked-in defaults use the existing `Local Chrome` tunnel and the protected runtime-key file at `~/.config/chatgpt-browser-bridge/runtime-api-key`. Never read or print that file.
-
-After local success, the remaining ChatGPT-side task is connector selection and an end-to-end BrowserJack smoke test.
-
-## Changes to this repo
-
-Only modify repository code when a concrete local observation demonstrates that a checked-in command is wrong for the installed upstream versions. Keep any fix narrow, cite the observed failure in the commit message, and report the diff back to ChatGPT for review.
+For compatibility changes, also run the live BrowserJack doctor and the direct MCP/Chrome smoke test documented in `README.md`.

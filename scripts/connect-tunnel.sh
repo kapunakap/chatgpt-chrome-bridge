@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ALIAS="${TUNNEL_ALIAS:-local-chrome}"
-TUNNEL_ID="${CONTROL_PLANE_TUNNEL_ID:-tunnel_6a8d22f3a68c81918cac74c9d23f183c}"
+TUNNEL_ID="${CONTROL_PLANE_TUNNEL_ID:-}"
 RUNTIME_API_KEY_FILE="${CONTROL_PLANE_RUNTIME_API_KEY_FILE:-$HOME/.config/chatgpt-browser-bridge/runtime-api-key}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
@@ -12,6 +12,7 @@ fail() {
   exit 1
 }
 
+[[ -n "$TUNNEL_ID" ]] || fail "Set CONTROL_PLANE_TUNNEL_ID to your own tunnel_... ID."
 [[ "$TUNNEL_ID" =~ ^tunnel_[a-z0-9]{32}$ ]] || fail "Tunnel ID does not look like a tunnel_... id."
 [[ -f "$RUNTIME_API_KEY_FILE" && -s "$RUNTIME_API_KEY_FILE" ]] || fail "Runtime API key file is missing or empty: $RUNTIME_API_KEY_FILE"
 [[ "$(stat -f '%Su' "$RUNTIME_API_KEY_FILE")" == "$(id -un)" ]] || fail "Runtime API key file must be owned by the current user."
