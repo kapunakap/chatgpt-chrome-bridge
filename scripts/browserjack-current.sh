@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/26.818.61809}"
-APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
-PLUGIN="$APP/Contents/Resources/plugins/openai-bundled/plugins/chrome"
-SERVICE="$PLUGIN/scripts/browser-service.mjs"
-CLIENT="$PLUGIN/scripts/browser-client.mjs"
-MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json"
-
 EXPECTED_VERSION="26.818.61809"
 EXPECTED_BUILD="7019"
 EXPECTED_BUNDLE_ID="com.openai.codex"
@@ -16,12 +9,19 @@ EXPECTED_CLIENT_SHA256="53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766e
 EXPECTED_HOST_NAME="com.openai.codexextension"
 PREFERRED_EXTENSION_ID="hehggadaopoacecdllhhajmbjkdcmajg"
 
+PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$EXPECTED_VERSION}"
+APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
+PLUGIN="$APP/Contents/Resources/plugins/openai-bundled/plugins/chrome"
+SERVICE="$PLUGIN/scripts/browser-service.mjs"
+CLIENT="$PLUGIN/scripts/browser-client.mjs"
+MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json"
+
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
-[[ -f "$PATCHED_ROOT/dist/cli.js" ]] || fail "Patched BrowserJack artifact is missing: $PATCHED_ROOT/dist/cli.js"
+[[ -f "$PATCHED_ROOT/dist/cli.js" ]] || fail "Prepared BrowserJack runtime is missing: $PATCHED_ROOT/dist/cli.js. Run bash scripts/bootstrap-local.sh."
 [[ -f "$SERVICE" ]] || fail "Trusted browser service is missing: $SERVICE"
 [[ -f "$CLIENT" ]] || fail "Browser client is missing: $CLIENT"
 [[ -f "$MANIFEST" ]] || fail "Chrome native-host manifest is missing: $MANIFEST"
@@ -29,13 +29,13 @@ fail() {
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
-[[ "$app_version" == "$EXPECTED_VERSION" ]] || fail "Unsupported ChatGPT.app version: $app_version"
-[[ "$app_build" == "$EXPECTED_BUILD" ]] || fail "Unsupported ChatGPT.app build: $app_build"
-[[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] || fail "Unexpected ChatGPT.app bundle ID: $bundle_id"
+[[ "$app_version" == "$EXPECTED_VERSION" ]] || fail "Unsupported ChatGPT/Codex app version: $app_version"
+[[ "$app_build" == "$EXPECTED_BUILD" ]] || fail "Unsupported ChatGPT/Codex app build: $app_build"
+[[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] || fail "Unexpected ChatGPT/Codex bundle ID: $bundle_id"
 
 signature_details="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 || true)"
 team_id="$(printf '%s\n' "$signature_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
-[[ "$team_id" == "$EXPECTED_TEAM_ID" ]] || fail "Unexpected ChatGPT.app TeamIdentifier"
+[[ "$team_id" == "$EXPECTED_TEAM_ID" ]] || fail "Unexpected OpenAI TeamIdentifier"
 
 client_sha256="$(/usr/bin/shasum -a 256 "$CLIENT" | awk '{print $1}')"
 [[ "$client_sha256" == "$EXPECTED_CLIENT_SHA256" ]] || fail "Unexpected browser-client SHA-256"

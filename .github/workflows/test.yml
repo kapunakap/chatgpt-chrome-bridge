@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+      - name: Check Node syntax
+        run: node --check scripts/browserjack-mcp-smoke.mjs
+      - name: Reject machine-specific public defaults
+        shell: bash
+        run: |
+          if git grep -n '/Users/'; then
+            echo 'Do not commit absolute user home paths.' >&2
+            exit 1
+          fi
+          if git grep -nE 'tunnel_[a-z0-9]{32}'; then
+            echo 'Do not commit a concrete OpenAI tunnel ID.' >&2
+            exit 1
+          fi
