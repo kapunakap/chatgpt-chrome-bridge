@@ -9,7 +9,7 @@ fail() {
   exit 1
 }
 
-printf '== chatgpt-browser-bridge local bootstrap ==\n'
+printf '== chatgpt-chrome-bridge local bootstrap ==\n'
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This bridge requires macOS."
 [[ "$(uname -m)" == "arm64" ]] || fail "This bridge currently requires Apple Silicon (arm64)."
