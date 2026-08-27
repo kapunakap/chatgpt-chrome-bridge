@@ -22,7 +22,8 @@ jobs:
       - name: Reject machine-specific public defaults
         shell: bash
         run: |
-          if git grep -n '/Users/'; then
+          user_home_prefix='/Users'
+          if git grep -n "${user_home_prefix}/"; then
             echo 'Do not commit absolute user home paths.' >&2
             exit 1
           fi
