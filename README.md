@@ -1,4 +1,4 @@
-# ChatGPT Browser Bridge
+# ChatGPT Chrome Bridge
 
 <img width="1672" height="941" alt="ChatGPT → Secure MCP Tunnel → Chrome on Personal Mac" src="https://github.com/user-attachments/assets/6ddbd299-ef4a-4fad-941b-7b3864252e3d" />
 
