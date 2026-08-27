@@ -5,6 +5,8 @@
 
 Control your existing signed-in Chrome on your Mac from ChatGPT through OpenAI Secure MCP Tunnel and [BrowserJack](https://github.com/stickerdaniel/browserjack).
 
+**Uses OpenAI's existing official Chrome extension. No additional Chrome extension is installed.**
+
 This is an **unofficial, experimental bridge**. It opens no public inbound port, runs no hosted browser, and installs no extra browser extension. ChatGPT reaches a local stdio MCP server through OpenAI's official `tunnel-client`; BrowserJack then reuses the browser runtime already installed by the official ChatGPT/Codex desktop app.
 
 ## Architecture
