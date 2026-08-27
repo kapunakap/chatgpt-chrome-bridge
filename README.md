@@ -1,4 +1,3 @@
-# NOT IMPLEMENTED YET - See https://github.com/kapunakap/chatgpt-chrome-bridge/issues/2
 # ChatGPT Chrome Bridge
 
 <img width="1672" height="941" alt="ChatGPT → Secure MCP Tunnel → Chrome on Personal Mac" src="https://github.com/user-attachments/assets/6ddbd299-ef4a-4fad-941b-7b3864252e3d" />
@@ -24,11 +23,11 @@ ChatGPT
 
 The bridge is deliberately fail-closed to the OpenAI desktop build it has been verified against:
 
-- app version: `26.818.61809`
-- build: `7019`
+- app version: `26.820.60940`
+- build: `7119`
 - bundle ID: `com.openai.codex`
 - OpenAI TeamIdentifier: `2DC432GLL2`
-- browser-client SHA-256: `53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766eb369b5e6`
+- browser-client SHA-256: `2158647076eed887c7591cca0957da78747ab9155819d64409d6b895e84ed99b`
 - Chrome native host: `com.openai.codexextension`
 - Chrome extension ID: `hehggadaopoacecdllhhajmbjkdcmajg`
 
@@ -83,7 +82,7 @@ bash scripts/bootstrap-local.sh
 The bootstrap installs/validates local prerequisites and builds the pinned BrowserJack compatibility runtime under:
 
 ```text
-~/Library/Application Support/chatgpt-browser-bridge/browserjack/26.818.61809
+~/Library/Application Support/chatgpt-browser-bridge/browserjack/26.820.60940
 ```
 
 It does not modify `ChatGPT.app`, Chrome, the OpenAI Chrome extension, or your browser profile.
@@ -105,6 +104,20 @@ Optional overrides:
 - `BROWSERJACK_PATCHED_ROOT` — override the prepared BrowserJack runtime path
 
 The bridge waits until `tunnel-client` reports the managed runtime as running, healthy, and ready.
+
+### Temporary `server/discover` compatibility
+
+[OpenAI tunnel-client issue #41](https://github.com/openai/tunnel-client/issues/41) tracks a hosted ChatGPT compatibility problem with legacy MCP servers. This repository includes an opt-in wrapper that immediately rejects `server/discover` with JSON-RPC `-32601` and forwards every other MCP message unchanged.
+
+Use the wrapper only when testing that compatibility path:
+
+```bash
+CONTROL_PLANE_TUNNEL_ID=tunnel_... \
+BROWSERJACK_COMMAND="$PWD/scripts/browserjack-discovery-compat.mjs" \
+bash scripts/connect-tunnel.sh
+```
+
+The direct BrowserJack launcher remains the default. Hosted acceptance on August 27, 2026 used tunnel-client candidate `0.0.13-dev+2183a1e`, refreshed the plugin actions, and completed the `Example Domain` Chrome smoke test. ChatGPT sent two `initialize` requests during refresh; both were forwarded and BrowserJack remained healthy, so the wrapper deliberately does not deduplicate initialization.
 
 ## 4. Connect it in ChatGPT
 

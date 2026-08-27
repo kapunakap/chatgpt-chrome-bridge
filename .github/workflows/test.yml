@@ -18,7 +18,12 @@ jobs:
       - name: Check shell syntax
         run: bash -n scripts/*.sh
       - name: Check Node syntax
-        run: node --check scripts/browserjack-mcp-smoke.mjs
+        run: |
+          node --check scripts/browserjack-mcp-smoke.mjs
+          node --check scripts/browserjack-discovery-compat.mjs
+          node --check scripts/browserjack-discovery-compat.test.mjs
+      - name: Test discovery compatibility wrapper
+        run: node --test scripts/browserjack-discovery-compat.test.mjs
       - name: Reject machine-specific public defaults
         shell: bash
         run: |

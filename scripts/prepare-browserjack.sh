@@ -3,11 +3,11 @@ set -euo pipefail
 
 UPSTREAM_REPO="https://github.com/stickerdaniel/browserjack.git"
 UPSTREAM_COMMIT="8ee11377e18289149a1bf660a49ec4b1513b4e72"
-EXPECTED_VERSION="26.818.61809"
-EXPECTED_BUILD="7019"
+EXPECTED_VERSION="26.820.60940"
+EXPECTED_BUILD="7119"
 EXPECTED_BUNDLE_ID="com.openai.codex"
 EXPECTED_TEAM_ID="2DC432GLL2"
-EXPECTED_CLIENT_SHA256="53484b46feddd277e436a0c3f38820eca8aab4e32c01bb44e1b5766eb369b5e6"
+EXPECTED_CLIENT_SHA256="2158647076eed887c7591cca0957da78747ab9155819d64409d6b895e84ed99b"
 EXPECTED_HOST_NAME="com.openai.codexextension"
 PREFERRED_EXTENSION_ID="hehggadaopoacecdllhhajmbjkdcmajg"
 
@@ -88,12 +88,16 @@ git -C "$SRC_ROOT" checkout --quiet --detach "$UPSTREAM_COMMIT"
 
 python3 - \
   "$SRC_ROOT/src/discovery/app.ts" \
-  "$SRC_ROOT/src/discovery/native-host.ts" <<'PY'
+  "$SRC_ROOT/src/discovery/native-host.ts" \
+  "$SRC_ROOT/src/doctor/live.ts" \
+  "$SRC_ROOT/src/runtime/server.ts" <<'PY'
 from pathlib import Path
 import sys
 
 app_path = Path(sys.argv[1])
 native_path = Path(sys.argv[2])
+live_path = Path(sys.argv[3])
+server_path = Path(sys.argv[4])
 
 app = app_path.read_text()
 old = '''  await runCommand(CODESIGN, ["--verify", "--strict", appPath]);
@@ -156,6 +160,22 @@ if old not in native:
     raise SystemExit("BrowserJack native-host signature block no longer matches the pinned upstream commit")
 native = native.replace(old, new, 1)
 native_path.write_text(native)
+
+live = live_path.read_text()
+old = '''await bridgeDoctorClient.setupBrowserRuntime({ globals: globalThis })'''
+new = '''globalThis.agent = await bridgeDoctorClient.setupBrowserRuntime()'''
+if live.count(old) != 1:
+    raise SystemExit("BrowserJack live runtime setup no longer matches the pinned upstream commit")
+live = live.replace(old, new, 1)
+live_path.write_text(live)
+
+server = server_path.read_text()
+old = '''    "Import that exact URL and call setupBrowserRuntime({ globals: globalThis }) before using agent.browsers.",'''
+new = '''    "Import that exact URL and assign globalThis.agent = await setupBrowserRuntime() before using agent.browsers.",'''
+if old not in server:
+    raise SystemExit("BrowserJack runtime instructions no longer match the pinned upstream commit")
+server = server.replace(old, new, 1)
+server_path.write_text(server)
 PY
 
 (
