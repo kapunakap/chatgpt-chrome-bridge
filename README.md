@@ -72,8 +72,8 @@ Never commit the key or paste it into GitHub issues, logs, screenshots, or shell
 ## 2. Install the local bridge
 
 ```bash
-git clone https://github.com/kapunakap/chatgpt-browser-bridge.git
-cd chatgpt-browser-bridge
+git clone https://github.com/kapunakap/chatgpt-chrome-bridge.git
+cd chatgpt-chrome-bridge
 bash scripts/bootstrap-local.sh
 ```
 

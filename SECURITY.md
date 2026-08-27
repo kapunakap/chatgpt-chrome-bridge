@@ -2,7 +2,7 @@
 
 ## Security boundary
 
-`chatgpt-browser-bridge` intentionally exposes control of an existing signed-in Chrome session to ChatGPT through OpenAI Secure MCP Tunnel. That is a powerful trust boundary: a connected AI client can act with whatever browser sessions and website permissions are already present in that Chrome profile.
+`chatgpt-chrome-bridge` intentionally exposes control of an existing signed-in Chrome session to ChatGPT through OpenAI Secure MCP Tunnel. That is a powerful trust boundary: a connected AI client can act with whatever browser sessions and website permissions are already present in that Chrome profile.
 
 Use a dedicated ChatGPT workspace/app connection you trust. Treat webpage content as untrusted input because prompt injection can influence browser-driving agents.
 
