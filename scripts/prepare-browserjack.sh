@@ -3,11 +3,11 @@ set -euo pipefail
 
 UPSTREAM_REPO="https://github.com/stickerdaniel/browserjack.git"
 UPSTREAM_COMMIT="8ee11377e18289149a1bf660a49ec4b1513b4e72"
-EXPECTED_VERSION="26.820.60940"
-EXPECTED_BUILD="7119"
+EXPECTED_VERSION="26.825.32147"
+EXPECTED_BUILD="7303"
 EXPECTED_BUNDLE_ID="com.openai.codex"
 EXPECTED_TEAM_ID="2DC432GLL2"
-EXPECTED_CLIENT_SHA256="2158647076eed887c7591cca0957da78747ab9155819d64409d6b895e84ed99b"
+EXPECTED_CLIENT_SHA256="c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501"
 EXPECTED_HOST_NAME="com.openai.codexextension"
 PREFERRED_EXTENSION_ID="hehggadaopoacecdllhhajmbjkdcmajg"
 
@@ -167,6 +167,12 @@ new = '''globalThis.agent = await bridgeDoctorClient.setupBrowserRuntime()'''
 if live.count(old) != 1:
     raise SystemExit("BrowserJack live runtime setup no longer matches the pinned upstream commit")
 live = live.replace(old, new, 1)
+
+old = '''var bridgeDoctorBackends = await agent.browsers.list(); bridgeDoctorBackends.length'''
+new = '''var bridgeDoctorBackends = await agent.browsers.list(); if (!bridgeDoctorBackends.some((backend) => backend.family === "chrome")) { await new Promise((resolveRetry) => setTimeout(resolveRetry, 2000)); bridgeDoctorBackends = await agent.browsers.list(); } if (!bridgeDoctorBackends.some((backend) => backend.family === "chrome")) { throw new Error("Chrome backend unavailable"); } bridgeDoctorBackends.length'''
+if live.count(old) != 1:
+    raise SystemExit("BrowserJack live backend check no longer matches the pinned upstream commit")
+live = live.replace(old, new, 1)
 live_path.write_text(live)
 
 server = server_path.read_text()
@@ -181,7 +187,8 @@ PY
 (
   cd "$SRC_ROOT"
   npm ci --quiet
-  npm run build --silent
+  npm run check --silent
+  npm test --silent
 )
 
 [[ -f "$SRC_ROOT/dist/cli.js" ]] || fail "Pinned BrowserJack build did not produce dist/cli.js."

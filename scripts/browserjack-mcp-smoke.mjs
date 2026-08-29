@@ -80,7 +80,24 @@ try {
     var smokeClient = await import(${JSON.stringify(browserClientUrl)});
     globalThis.agent = await smokeClient.setupBrowserRuntime();
     var smokeBackends = await agent.browsers.list();
-    var smokeChrome = await agent.browsers.get("chrome");
+    if (!smokeBackends.some((backend) => backend.family === "chrome")) {
+      await new Promise((resolveRetry) => setTimeout(resolveRetry, 2000));
+      smokeBackends = await agent.browsers.list();
+    }
+    var smokeBackendSummary = smokeBackends.map((backend) => ({
+      family: backend.family,
+      name: backend.name,
+      type: backend.type,
+    }));
+    var smokeChrome;
+    try {
+      smokeChrome = await agent.browsers.get("chrome");
+    } catch (error) {
+      throw new Error(
+        "Chrome unavailable; backends=" + JSON.stringify(smokeBackendSummary) +
+        "; cause=" + String(error),
+      );
+    }
     await smokeChrome.documentation();
     var smokeTab = await smokeChrome.tabs.new();
     await smokeTab.goto("https://example.com");
@@ -107,7 +124,8 @@ try {
     },
   });
   if (toolResponse.error || toolResponse.result?.isError === true) {
-    throw new Error("BrowserJack browser smoke call failed");
+    const failure = JSON.stringify(toolResponse.error ?? toolResponse.result ?? {});
+    throw new Error(`BrowserJack browser smoke call failed: ${failure}`);
   }
 
   const rendered = JSON.stringify(toolResponse.result?.content ?? []);
