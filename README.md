@@ -21,18 +21,22 @@ ChatGPT
 
 ## Current compatibility
 
-The bridge is deliberately fail-closed to the OpenAI desktop build it has been verified against:
+The bridge is deliberately fail-closed to an approved browser-runtime fingerprint rather than a marketing app version. Version/build-only updates can continue after BrowserJack's one-time live self-test; changed browser code still requires explicit review.
 
-- app version: `26.825.32147`
-- build: `7303`
+Current locally tested build:
+
+- app version: `26.825.51511`
+- build: `7377`
 - bundle ID: `com.openai.codex`
 - OpenAI TeamIdentifier: `2DC432GLL2`
 - browser-client SHA-256: `c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501`
+- browser-service SHA-256: `6d9fe69bd4a72dcd6fc529bd5c9316933a24ee17478551b25bd8e780bdfc8ae0`
+- Chrome native-host SHA-256: `39d62fff1d203eb6d4b41fff100361f448cd6821b13d00c5626f6ed89178331e`
 - Chrome native host: `com.openai.codexextension`
 - Chrome extension ID: `hehggadaopoacecdllhhajmbjkdcmajg`
 - tunnel-client: `0.0.13`
 
-Any mismatch fails closed. ChatGPT/Codex desktop updates can therefore require a compatibility review before this bridge works again.
+Identity mismatches always fail closed. Hash changes fail until they pass the explicit local review command documented below.
 
 BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing behavior used by this tested build. `scripts/prepare-browserjack.sh` builds a pinned BrowserJack checkout with the narrow compatibility adaptation used by this project and makes the live doctor require a real Chrome backend. The tested build continues to run BrowserJack inside its restricted outer Codex sandbox. No OpenAI binary, extension, browser profile, or app bundle is modified or redistributed.
 
@@ -84,10 +88,22 @@ bash scripts/bootstrap-local.sh
 The bootstrap installs/validates local prerequisites and builds the pinned BrowserJack compatibility runtime under:
 
 ```text
-~/Library/Application Support/chatgpt-browser-bridge/browserjack/26.825.32147
+~/Library/Application Support/chatgpt-browser-bridge/browserjack/8ee11377-compat-v1
 ```
 
 It does not modify `ChatGPT.app`, Chrome, the OpenAI Chrome extension, or your browser profile.
+
+### Review a real browser-runtime change
+
+If a desktop update changes one of the approved browser component hashes, review it interactively:
+
+```bash
+bash scripts/review-browserjack-update.sh
+```
+
+The command verifies the fixed identities, shows only non-secret hashes, stages the candidate for the live doctor and direct Chrome smoke test, and writes the exact approved fingerprint to a private mode-`600` file only after both checks pass. A failed review restores the earlier local compatibility state and leaves Local Chrome stopped.
+
+Local approvals are stored outside the repository at `~/.config/chatgpt-browser-bridge/browser-runtime-approvals.json`. App version/build changes with an already approved fingerprint need no command or repository edit; BrowserJack self-tests each new build once.
 
 ## 3. Connect the tunnel
 
@@ -135,7 +151,7 @@ BROWSERJACK_COMMAND="$PWD/scripts/browserjack-discovery-compat.mjs" \
 bash scripts/connect-tunnel.sh
 ```
 
-The direct BrowserJack launcher remains the default for local use. Hosted ChatGPT acceptance for build `26.825.32147` on August 30, 2026 used official tunnel-client `0.0.13`, the initialized-notification compatibility opt-in, this discovery wrapper, and Chat mode. ChatGPT completed the real Chrome tool call and returned `Example Domain` without a response-deadline or client-internal `502` event. The wrapper deliberately does not deduplicate initialization; an earlier accepted trace received two harmless hosted `initialize` requests before `notifications/initialized` and `tools/list`.
+The direct BrowserJack launcher remains the default for local use. Hosted ChatGPT acceptance for build `26.825.51511` (`7377`) on August 30, 2026 used official tunnel-client `0.0.13`, the initialized-notification compatibility opt-in, the stable `8ee11377-compat-v1` adapter, this discovery wrapper, and Chat mode. ChatGPT completed the real Chrome tool call and returned `Example Domain` without a response-deadline or client-internal `502` event. The wrapper deliberately does not deduplicate initialization; an earlier accepted trace received two harmless hosted `initialize` requests before `notifications/initialized` and `tools/list`.
 
 ## 4. Connect it in ChatGPT
 
@@ -240,7 +256,7 @@ After moving this repository, uninstall the service from the old checkout, recon
 
 This bridge gives a remote AI client control of a browser that may already be authenticated to sensitive sites. Treat access to the ChatGPT app/workspace connection as equivalent to access to those browser sessions, and assume webpage content can attempt prompt injection.
 
-The runtime API key stays in a local file and is passed to `tunnel-client` by file reference. The compatibility launcher checks the exact tested OpenAI app version/build, bundle ID, TeamIdentifier, browser-client hash, native-host identity, and extension identity before starting. See [SECURITY.md](SECURITY.md) for the full trust boundary and reporting guidance.
+The runtime API key stays in a local file and is passed to `tunnel-client` by file reference. The compatibility launcher checks the fixed OpenAI/Chrome identities plus approved browser-client, browser-service, and native-host hashes before starting. Every new app build then passes BrowserJack's one-time live self-test. See [SECURITY.md](SECURITY.md) for the full trust boundary and reporting guidance.
 
 ## Source projects
 

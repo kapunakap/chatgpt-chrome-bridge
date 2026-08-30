@@ -22,18 +22,23 @@ If a credential is accidentally exposed, revoke/rotate it before doing anything 
 
 ## Compatibility trust checks
 
-The current bridge is pinned to one verified OpenAI desktop build. Before it launches the compatibility BrowserJack runtime, it checks:
+The bridge separates browser-runtime trust from app-build compatibility. Before it launches the compatibility BrowserJack runtime, it checks:
 
-- exact app version and build
 - bundle ID
 - OpenAI TeamIdentifier
 - exact browser-client SHA-256
+- exact browser-service SHA-256
+- exact installed and bundled Chrome native-host SHA-256, which must match each other
 - expected Chrome native-host name
 - expected Chrome extension ID
 
+An app version or build number is not itself a trust boundary. When all approved identities and component hashes are unchanged, BrowserJack performs a one-time live self-test for the exact app version, build, plugin version, architecture, and browser-client hash. Failed self-tests are not recorded.
+
+Changed component hashes remain blocked until `scripts/review-browserjack-update.sh` stages the exact candidate, passes the live doctor and direct Chrome smoke test, and writes a user-owned mode-`600` local approval. Identity changes cannot be approved by that command and require a checked-in review. The local approval file contains hashes and build metadata only.
+
 The prepared BrowserJack checkout retains BrowserJack's cache/browser-client integrity checks. The narrow local patch exists because BrowserJack 0.3.0 does not understand the tested OpenAI build's current signing/layout behavior. The patch does not modify or redistribute OpenAI binaries.
 
-Any unknown build or identity mismatch must fail closed until reviewed. Do not solve compatibility failures by globally disabling signature or identity checks.
+Any unknown hash or identity mismatch must fail closed until reviewed. Do not solve compatibility failures by globally disabling signature, identity, fingerprint, or self-test checks.
 
 ## Network boundary
 

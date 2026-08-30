@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXPECTED_VERSION="26.825.32147"
-EXPECTED_BUILD="7303"
-EXPECTED_BUNDLE_ID="com.openai.codex"
-EXPECTED_TEAM_ID="2DC432GLL2"
-EXPECTED_CLIENT_SHA256="c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501"
-EXPECTED_HOST_NAME="com.openai.codexextension"
-PREFERRED_EXTENSION_ID="hehggadaopoacecdllhhajmbjkdcmajg"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FINGERPRINT_HELPER="$REPO_ROOT/scripts/browserjack-fingerprint.mjs"
+ADAPTER_ID="$(node "$FINGERPRINT_HELPER" config adapterId)"
+EXPECTED_HOST_NAME="$(node "$FINGERPRINT_HELPER" config nativeHostName)"
+PREFERRED_EXTENSION_ID="$(node "$FINGERPRINT_HELPER" config preferredExtensionId)"
 
-PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$EXPECTED_VERSION}"
+PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$ADAPTER_ID}"
 APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
 PLUGIN="$APP/Contents/Resources/plugins/openai-bundled/plugins/chrome"
 SERVICE="$PLUGIN/scripts/browser-service.mjs"
@@ -28,17 +26,7 @@ fail() {
 
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
-bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
-[[ "$app_version" == "$EXPECTED_VERSION" ]] || fail "Unsupported ChatGPT/Codex app version: $app_version"
-[[ "$app_build" == "$EXPECTED_BUILD" ]] || fail "Unsupported ChatGPT/Codex app build: $app_build"
-[[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] || fail "Unexpected ChatGPT/Codex bundle ID: $bundle_id"
-
-signature_details="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 || true)"
-team_id="$(printf '%s\n' "$signature_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
-[[ "$team_id" == "$EXPECTED_TEAM_ID" ]] || fail "Unexpected OpenAI TeamIdentifier"
-
-client_sha256="$(/usr/bin/shasum -a 256 "$CLIENT" | awk '{print $1}')"
-[[ "$client_sha256" == "$EXPECTED_CLIENT_SHA256" ]] || fail "Unexpected browser-client SHA-256"
+node "$FINGERPRINT_HELPER" assert --app "$APP" --manifest "$MANIFEST" >/dev/null
 
 native_metadata="$(
   python3 - "$MANIFEST" "$EXPECTED_HOST_NAME" "$PREFERRED_EXTENSION_ID" <<'PY'
@@ -82,8 +70,10 @@ PY
 export BROWSERJACK_EXPERIMENT_ALLOW_BROKEN_OPENAI_SIGNATURE=1
 export BROWSERJACK_EXPERIMENT_NATIVE_HOST_NAME="$native_host_name"
 export BROWSERJACK_EXPERIMENT_EXTENSION_ID="$extension_id"
+export BROWSERJACK_REQUIRE_PER_BUILD_SELF_TEST=1
 export NODE_REPL_TRUSTED_SERVICES="$trusted_services"
 export BROWSER_USE_CODEX_APP_VERSION="$app_version"
+export BROWSER_USE_CODEX_APP_BUILD_VERSION="$app_build"
 export BROWSER_USE_CODEX_APP_BUILD_FLAVOR="prod"
 export NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS="1000"
 export BROWSER_USE_AVAILABLE_BACKENDS="chrome"

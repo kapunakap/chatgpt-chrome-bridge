@@ -2,21 +2,17 @@
 set -euo pipefail
 
 UPSTREAM_REPO="https://github.com/stickerdaniel/browserjack.git"
-UPSTREAM_COMMIT="8ee11377e18289149a1bf660a49ec4b1513b4e72"
-EXPECTED_VERSION="26.825.32147"
-EXPECTED_BUILD="7303"
-EXPECTED_BUNDLE_ID="com.openai.codex"
-EXPECTED_TEAM_ID="2DC432GLL2"
-EXPECTED_CLIENT_SHA256="c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501"
-EXPECTED_HOST_NAME="com.openai.codexextension"
-PREFERRED_EXTENSION_ID="hehggadaopoacecdllhhajmbjkdcmajg"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FINGERPRINT_HELPER="$REPO_ROOT/scripts/browserjack-fingerprint.mjs"
+UPSTREAM_COMMIT="$(node "$FINGERPRINT_HELPER" config upstreamCommit)"
+ADAPTER_ID="$(node "$FINGERPRINT_HELPER" config adapterId)"
 
 APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
 PLUGIN="$APP/Contents/Resources/plugins/openai-bundled/plugins/chrome"
 CLIENT="$PLUGIN/scripts/browser-client.mjs"
 SERVICE="$PLUGIN/scripts/browser-service.mjs"
 MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json"
-TARGET="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$EXPECTED_VERSION}"
+TARGET="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$ADAPTER_ID}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -35,45 +31,9 @@ done
 
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
-bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
-[[ "$app_version" == "$EXPECTED_VERSION" ]] || fail "Unsupported ChatGPT/Codex app version: $app_version (expected $EXPECTED_VERSION)."
-[[ "$app_build" == "$EXPECTED_BUILD" ]] || fail "Unsupported ChatGPT/Codex app build: $app_build (expected $EXPECTED_BUILD)."
-[[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]] || fail "Unexpected ChatGPT/Codex bundle ID: $bundle_id"
+node "$FINGERPRINT_HELPER" assert --app "$APP" --manifest "$MANIFEST" >/dev/null
 
-signature_details="$(/usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 || true)"
-team_id="$(printf '%s\n' "$signature_details" | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
-[[ "$team_id" == "$EXPECTED_TEAM_ID" ]] || fail "Unexpected OpenAI TeamIdentifier."
-
-client_sha256="$(/usr/bin/shasum -a 256 "$CLIENT" | awk '{print $1}')"
-[[ "$client_sha256" == "$EXPECTED_CLIENT_SHA256" ]] || fail "Unexpected browser-client SHA-256."
-
-native_metadata="$(python3 - "$MANIFEST" "$EXPECTED_HOST_NAME" "$PREFERRED_EXTENSION_ID" <<'PY'
-import json
-import re
-import sys
-
-manifest_path, expected_host, preferred_id = sys.argv[1:]
-with open(manifest_path, encoding="utf-8") as handle:
-    value = json.load(handle)
-
-if value.get("name") != expected_host:
-    raise SystemExit("unexpected native-host name")
-
-ids = []
-for origin in value.get("allowed_origins") or []:
-    match = re.fullmatch(r"chrome-extension://([a-z]{32})/", origin)
-    if match:
-        ids.append(match.group(1))
-
-if preferred_id not in ids:
-    raise SystemExit("preferred Chrome extension ID is not allowed by the native host")
-
-print(expected_host)
-print(preferred_id)
-PY
-)" || fail "Could not verify Chrome native-host metadata."
-
-printf 'Verified OpenAI desktop build %s (%s), TeamIdentifier, browser-client hash, native host, and extension identity.\n' "$app_version" "$app_build"
+printf 'Verified OpenAI desktop build %s (%s) against an approved browser-runtime fingerprint.\n' "$app_version" "$app_build"
 
 mkdir -p "$(dirname "$TARGET")"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt-browser-bridge-browserjack.XXXXXX")"
@@ -90,7 +50,10 @@ python3 - \
   "$SRC_ROOT/src/discovery/app.ts" \
   "$SRC_ROOT/src/discovery/native-host.ts" \
   "$SRC_ROOT/src/doctor/live.ts" \
-  "$SRC_ROOT/src/runtime/server.ts" <<'PY'
+  "$SRC_ROOT/src/runtime/server.ts" \
+  "$SRC_ROOT/src/compat/ensure.ts" \
+  "$SRC_ROOT/src/compat/verified.ts" \
+  "$SRC_ROOT/test/compat.test.mjs" <<'PY'
 from pathlib import Path
 import sys
 
@@ -98,6 +61,9 @@ app_path = Path(sys.argv[1])
 native_path = Path(sys.argv[2])
 live_path = Path(sys.argv[3])
 server_path = Path(sys.argv[4])
+ensure_path = Path(sys.argv[5])
+verified_path = Path(sys.argv[6])
+compat_test_path = Path(sys.argv[7])
 
 app = app_path.read_text()
 old = '''  await runCommand(CODESIGN, ["--verify", "--strict", appPath]);
@@ -182,6 +148,75 @@ if old not in server:
     raise SystemExit("BrowserJack runtime instructions no longer match the pinned upstream commit")
 server = server.replace(old, new, 1)
 server_path.write_text(server)
+
+ensure = ensure_path.read_text()
+old = '''  if (await findCompatibilityEntry(runtime)) {
+    return { source: "manifest" };
+  }'''
+new = '''  if (
+    process.env.BROWSERJACK_REQUIRE_PER_BUILD_SELF_TEST !== "1" &&
+    (await findCompatibilityEntry(runtime))
+  ) {
+    return { source: "manifest" };
+  }'''
+if old not in ensure:
+    raise SystemExit("BrowserJack compatibility manifest gate no longer matches the pinned upstream commit")
+ensure = ensure.replace(old, new, 1)
+ensure_path.write_text(ensure)
+
+verified = verified_path.read_text()
+verified = verified.replace(
+    '''  appVersion: string;\n  pluginVersion: string;''',
+    '''  appVersion: string;\n  buildVersion: string;\n  pluginVersion: string;''',
+    1,
+)
+verified = verified.replace(
+    '''  "appVersion" | "pluginVersion" | "architecture" | "browserClientSha256"''',
+    '''  "appVersion" | "buildVersion" | "pluginVersion" | "architecture" | "browserClientSha256"''',
+    1,
+)
+verified = verified.replace(
+    '''    build.appVersion === runtime.appVersion &&\n    build.pluginVersion === runtime.pluginVersion &&''',
+    '''    build.appVersion === runtime.appVersion &&\n    build.buildVersion === runtime.buildVersion &&\n    build.pluginVersion === runtime.pluginVersion &&''',
+    1,
+)
+verified = verified.replace(
+    '''      typeof build.appVersion === "string" &&\n      typeof build.pluginVersion === "string" &&''',
+    '''      typeof build.appVersion === "string" &&\n      typeof build.buildVersion === "string" &&\n      typeof build.pluginVersion === "string" &&''',
+    1,
+)
+verified = verified.replace(
+    '''    appVersion: runtime.appVersion,\n    pluginVersion: runtime.pluginVersion,''',
+    '''    appVersion: runtime.appVersion,\n    buildVersion: runtime.buildVersion,\n    pluginVersion: runtime.pluginVersion,''',
+    1,
+)
+for required in ["buildVersion: string", "build.buildVersion === runtime.buildVersion"]:
+    if required not in verified:
+        raise SystemExit("BrowserJack verified-build key patch did not apply")
+verified_path.write_text(verified)
+
+compat_test = compat_test_path.read_text()
+old = '''    appVersion: entry.appVersion,\n    pluginVersion: entry.pluginVersion,'''
+new = '''    appVersion: entry.appVersion,\n    buildVersion: "test-build-1",\n    pluginVersion: entry.pluginVersion,'''
+if old not in compat_test:
+    raise SystemExit("BrowserJack compatibility test runtime no longer matches the pinned upstream commit")
+compat_test = compat_test.replace(old, new, 1)
+marker = '''test("manifest-covered builds skip the self-test entirely", async (t) => {'''
+addition = '''test("a new build version runs a separate self-test", async (t) => {
+  await withTemporaryHome(t);
+  const first = { ...(await supportedRuntime()), appVersion: "99.1.2", buildVersion: "1" };
+  const second = { ...first, buildVersion: "2" };
+  let selfTests = 0;
+  await ensureBuildCompatible(first, async () => { selfTests += 1; });
+  await ensureBuildCompatible(second, async () => { selfTests += 1; });
+  assert.equal(selfTests, 2);
+});
+
+'''
+if marker not in compat_test:
+    raise SystemExit("BrowserJack compatibility test insertion point no longer matches")
+compat_test = compat_test.replace(marker, addition + marker, 1)
+compat_test_path.write_text(compat_test)
 PY
 
 (

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "adapter": {
+    "id": "8ee11377-compat-v1",
+    "upstreamCommit": "8ee11377e18289149a1bf660a49ec4b1513b4e72"
+  },
+  "identity": {
+    "bundleId": "com.openai.codex",
+    "teamId": "2DC432GLL2",
+    "nativeHostName": "com.openai.codexextension",
+    "preferredExtensionId": "hehggadaopoacecdllhhajmbjkdcmajg"
+  },
+  "fingerprints": [
+    {
+      "label": "ChatGPT Chrome runtime verified 2026-08-30",
+      "browserClientSha256": "c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501",
+      "browserServiceSha256": "6d9fe69bd4a72dcd6fc529bd5c9316933a24ee17478551b25bd8e780bdfc8ae0",
+      "nativeHostSha256": "39d62fff1d203eb6d4b41fff100361f448cd6821b13d00c5626f6ed89178331e"
+    }
+  ]
+}
