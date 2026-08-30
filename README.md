@@ -30,6 +30,7 @@ The bridge is deliberately fail-closed to the OpenAI desktop build it has been v
 - browser-client SHA-256: `c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501`
 - Chrome native host: `com.openai.codexextension`
 - Chrome extension ID: `hehggadaopoacecdllhhajmbjkdcmajg`
+- tunnel-client: `0.0.13`
 
 Any mismatch fails closed. ChatGPT/Codex desktop updates can therefore require a compatibility review before this bridge works again.
 
@@ -42,6 +43,7 @@ BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing 
 - the official ChatGPT/Codex Chrome integration already installed and working in Chrome
 - Homebrew
 - Node.js 22+ (the bootstrap script installs Homebrew `node@22` when needed)
+- official OpenAI `tunnel-client 0.0.13` (the bootstrap upgrades through `openai/tools` and fails closed on another version)
 - an OpenAI Secure MCP Tunnel associated with your Platform organization and ChatGPT workspace
 - a runtime API key with **Tunnels Read + Use**, stored in a local mode-`600` file
 - ChatGPT developer mode / permission to create a custom app
@@ -87,7 +89,7 @@ The bootstrap installs/validates local prerequisites and builds the pinned Brows
 
 It does not modify `ChatGPT.app`, Chrome, the OpenAI Chrome extension, or your browser profile.
 
-## 3. Start the tunnel
+## 3. Connect the tunnel
 
 Set your own tunnel ID and connect:
 
@@ -105,11 +107,27 @@ Optional overrides:
 
 The bridge waits until `tunnel-client` reports the managed runtime as running, healthy, and ready.
 
-### Temporary `server/discover` compatibility
+### Keep Local Chrome running
+
+After the first connection succeeds, install the user-level macOS LaunchAgent:
+
+```bash
+bash scripts/service.sh install
+```
+
+The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the replacement process to become running, healthy, and ready. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits.
+
+The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.13` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
+
+Do not run `connect-tunnel.sh` after persistence is installed. launchd must be the only owner of the tunnel process; use the service commands below instead. If you used a custom `TUNNEL_ALIAS`, `TUNNEL_CLIENT_PROFILE_DIR`, or `CONTROL_PLANE_RUNTIME_API_KEY_FILE`, pass the same override when installing or operating the service.
+
+This is a per-user service. Local Chrome is unavailable while the Mac is powered off, logged out, asleep without network access, or unable to reach OpenAI over outbound HTTPS.
+
+### Hosted `server/discover` compatibility
 
 [OpenAI tunnel-client issue #41](https://github.com/openai/tunnel-client/issues/41) tracks a hosted ChatGPT compatibility problem with legacy MCP servers. This repository includes an opt-in wrapper that immediately rejects `server/discover` with JSON-RPC `-32601` and forwards every other MCP message unchanged.
 
-Use the wrapper only when testing that compatibility path:
+Use the wrapper for the hosted ChatGPT legacy-stdio compatibility path:
 
 ```bash
 CONTROL_PLANE_TUNNEL_ID=tunnel_... \
@@ -117,7 +135,7 @@ BROWSERJACK_COMMAND="$PWD/scripts/browserjack-discovery-compat.mjs" \
 bash scripts/connect-tunnel.sh
 ```
 
-The direct BrowserJack launcher remains the default. Hosted acceptance for build `26.825.32147` on August 29, 2026 used tunnel-client `0.0.12`, refreshed the plugin actions, and completed the `Example Domain` Chrome smoke test. An earlier hosted trace sent two `initialize` requests during refresh; both were forwarded and BrowserJack remained healthy, so the wrapper deliberately does not deduplicate initialization.
+The direct BrowserJack launcher remains the default for local use. Hosted ChatGPT acceptance for build `26.825.32147` on August 30, 2026 used official tunnel-client `0.0.13`, the initialized-notification compatibility opt-in, this discovery wrapper, and Chat mode. ChatGPT completed the real Chrome tool call and returned `Example Domain` without a response-deadline or client-internal `502` event. The wrapper deliberately does not deduplicate initialization; an earlier accepted trace received two harmless hosted `initialize` requests before `notifications/initialized` and `tools/list`.
 
 ## 4. Connect it in ChatGPT
 
@@ -152,17 +170,71 @@ Validate the local BrowserJack handshake and managed runtime:
 bash scripts/status.sh
 ```
 
+This also fails closed unless tunnel-client is exactly `0.0.13` and reports the initialized-notification compatibility mode enabled.
+
 Run the direct MCP/Chrome smoke test:
 
 ```bash
 node scripts/browserjack-mcp-smoke.mjs
 ```
 
-Stop the managed runtime:
+Inspect the persistent service:
+
+```bash
+bash scripts/service.sh status
+```
+
+Restart it under launchd:
+
+```bash
+bash scripts/service.sh restart
+```
+
+Temporarily pause it for the current login session:
 
 ```bash
 bash scripts/stop.sh
 ```
+
+Resume it:
+
+```bash
+bash scripts/service.sh start
+```
+
+Disable it across future logins, then stop it:
+
+```bash
+launchctl disable "gui/$(id -u)/com.kapunakap.chatgpt-chrome-bridge.local-chrome"
+bash scripts/service.sh stop
+```
+
+Re-enable and start it:
+
+```bash
+launchctl enable "gui/$(id -u)/com.kapunakap.chatgpt-chrome-bridge.local-chrome"
+bash scripts/service.sh start
+```
+
+Uninstall only the LaunchAgent while preserving the tunnel profile, runtime-key file, and logs:
+
+```bash
+bash scripts/service.sh uninstall
+```
+
+The tunnel log remains at:
+
+```text
+~/Library/Application Support/tunnel-client/logs/local-chrome.log
+```
+
+LaunchAgent stdout and stderr are private mode-`600` files under:
+
+```text
+~/Library/Application Support/chatgpt-browser-bridge/launchd/
+```
+
+After moving this repository, uninstall the service from the old checkout, reconnect once from the new checkout so the profile points at the new BrowserJack launcher, then install the service again. To refresh the supported tunnel-client version, run `bash scripts/bootstrap-local.sh`, then rerun `bash scripts/service.sh install` so launchd uses the checked-in version guard and compatibility environment.
 
 ## Security
 

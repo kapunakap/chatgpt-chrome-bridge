@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHATGPT_APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
+TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
+EXPECTED_TUNNEL_CLIENT_VERSION="$("$TUNNEL_CLIENT_SHIM" --expected-version)"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -46,7 +48,21 @@ if ! command -v tunnel-client >/dev/null 2>&1; then
   printf 'Installing OpenAI tunnel-client from the official Homebrew tap...\n'
   brew install openai/tools/tunnel-client
 fi
-printf 'tunnel-client: %s\n' "$(tunnel-client --version)"
+
+tunnel_client_version_full="$(tunnel-client --version | awk '{print $1}')"
+tunnel_client_version="${tunnel_client_version_full%%+*}"
+if [[ "$tunnel_client_version" != "$EXPECTED_TUNNEL_CLIENT_VERSION" ]]; then
+  printf 'Updating the official OpenAI Homebrew tap and upgrading tunnel-client to %s...\n' "$EXPECTED_TUNNEL_CLIENT_VERSION"
+  HOMEBREW_NO_INSTALL_CLEANUP=1 brew update
+  HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade openai/tools/tunnel-client
+fi
+
+tunnel_client_version_full="$(tunnel-client --version | awk '{print $1}')"
+tunnel_client_version="${tunnel_client_version_full%%+*}"
+[[ "$tunnel_client_version" == "$EXPECTED_TUNNEL_CLIENT_VERSION" ]] || {
+  fail "Unsupported tunnel-client version after bootstrap: $tunnel_client_version_full (expected $EXPECTED_TUNNEL_CLIENT_VERSION)."
+}
+printf 'tunnel-client: %s\n' "$("$TUNNEL_CLIENT_SHIM" --version)"
 
 printf '\n== Preparing pinned BrowserJack compatibility runtime ==\n'
 bash "$REPO_ROOT/scripts/prepare-browserjack.sh"
@@ -60,3 +76,5 @@ printf '\n== BrowserJack live handshake ==\n'
 printf '\nBOOTSTRAP_OK=1\n'
 printf 'Next: store a tunnel runtime API key in ~/.config/chatgpt-browser-bridge/runtime-api-key, then run:\n'
 printf '  CONTROL_PLANE_TUNNEL_ID=tunnel_... bash scripts/connect-tunnel.sh\n'
+printf 'After the first connection succeeds, make it persistent:\n'
+printf '  bash scripts/service.sh install\n'

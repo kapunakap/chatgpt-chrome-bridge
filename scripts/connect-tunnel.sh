@@ -6,18 +6,27 @@ TUNNEL_ID="${CONTROL_PLANE_TUNNEL_ID:-}"
 RUNTIME_API_KEY_FILE="${CONTROL_PLANE_RUNTIME_API_KEY_FILE:-$HOME/.config/chatgpt-browser-bridge/runtime-api-key}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
+TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
+SERVICE_LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
+SERVICE_PLIST="${LOCAL_CHROME_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist}"
+SERVICE_TARGET="gui/$(id -u)/$SERVICE_LABEL"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
 }
 
+if [[ -f "$SERVICE_PLIST" ]] || launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
+  fail "Persistent Local Chrome service owns this tunnel. Use: bash scripts/service.sh start|restart|status"
+fi
+
 [[ -n "$TUNNEL_ID" ]] || fail "Set CONTROL_PLANE_TUNNEL_ID to your own tunnel_... ID."
 [[ "$TUNNEL_ID" =~ ^tunnel_[a-z0-9]{32}$ ]] || fail "Tunnel ID does not look like a tunnel_... id."
 [[ -f "$RUNTIME_API_KEY_FILE" && -s "$RUNTIME_API_KEY_FILE" ]] || fail "Runtime API key file is missing or empty: $RUNTIME_API_KEY_FILE"
 [[ "$(stat -f '%Su' "$RUNTIME_API_KEY_FILE")" == "$(id -un)" ]] || fail "Runtime API key file must be owned by the current user."
 [[ "$(stat -f '%Lp' "$RUNTIME_API_KEY_FILE")" == "600" ]] || fail "Runtime API key file permissions must be 600."
-command -v tunnel-client >/dev/null 2>&1 || fail "tunnel-client is not installed; run bash scripts/bootstrap-local.sh."
+[[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
+"$TUNNEL_CLIENT_SHIM" --version >/dev/null
 [[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
 
 printf '== Revalidating BrowserJack browser handshake ==\n'
@@ -30,7 +39,7 @@ MCP_COMMAND="\"${BROWSERJACK_SHIM}\" run"
 printf '\n== Connecting managed tunnel runtime (%s) ==\n' "$ALIAS"
 set +e
 connect_output="$({
-  tunnel-client runtimes --json connect \
+  "$TUNNEL_CLIENT_SHIM" runtimes --json connect \
     --alias "$ALIAS" \
     --tunnel-id "$TUNNEL_ID" \
     --runtime-api-key "file:$RUNTIME_API_KEY_FILE" \
@@ -45,7 +54,7 @@ printf '\n== Waiting for running + healthy + ready ==\n'
 status_json=''
 for _ in {1..30}; do
   set +e
-  status_json="$(tunnel-client runtimes --json status "$ALIAS" 2>&1)"
+  status_json="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>&1)"
   status_rc=$?
   set -e
 
