@@ -7,10 +7,11 @@ BROWSERJACK_SHIM="$REPO_ROOT/scripts/browserjack-current.sh"
 PREPARE_SH="$REPO_ROOT/scripts/prepare-browserjack.sh"
 SMOKE_TEST="$REPO_ROOT/scripts/browserjack-mcp-smoke.mjs"
 SERVICE_SH="$REPO_ROOT/scripts/service.sh"
+SERVICE_TARGET="gui/$(id -u)/${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
 APPROVAL_FILE="$(node "$FINGERPRINT_HELPER" config approvalsFile)"
 VERIFIED_BUILDS_FILE="$(node "$FINGERPRINT_HELPER" config verifiedBuildsFile)"
 ADAPTER_ID="$(node "$FINGERPRINT_HELPER" config adapterId)"
-PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-$HOME/Library/Application Support/chatgpt-browser-bridge/browserjack/$ADAPTER_ID}"
+PATCHED_ROOT="${BROWSERJACK_PATCHED_ROOT:-${CODEX_HOME:-$HOME/.codex}/chatgpt-browser-bridge/browserjack/$ADAPTER_ID}"
 APP="${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}"
 MANIFEST="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json"
 
@@ -87,7 +88,7 @@ main() {
   IFS= read -r answer
   [[ "$answer" == "y" || "$answer" == "Y" ]] || fail "Review declined; no state was changed."
 
-  if bash "$SERVICE_SH" status >/dev/null 2>&1; then
+  if launchctl print "$SERVICE_TARGET" >/dev/null 2>&1; then
     was_running=true
   fi
 

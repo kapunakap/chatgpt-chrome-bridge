@@ -19,24 +19,13 @@ ChatGPT
   -> existing signed-in Chrome
 ```
 
-## Current compatibility
+## Compatibility
 
-The bridge is deliberately fail-closed to an approved browser-runtime fingerprint rather than a marketing app version. Version/build-only updates can continue after BrowserJack's one-time live self-test; changed browser code still requires explicit review.
+The bridge is deliberately fail-closed to an exact browser-runtime fingerprint rather than a marketing app version. The signed plugin metadata is feature-detected from either `extension-ids.json` or the legacy `extension-id.json`; the Chrome store ID is selected from the signed Chrome entry, never from the first native-host origin.
 
-Current locally tested build:
+When signed browser content is unchanged, a new app version/build is tested once by the local BrowserJack runtime and cached as an exact per-build result. A changed browser fingerprint is admitted only through a real live self-test; the exact fingerprint is written to the private local approval file only after that test succeeds. Identity, signature, byte-identity, and containment mismatches always fail closed.
 
-- app version: `26.825.51511`
-- build: `7377`
-- bundle ID: `com.openai.codex`
-- OpenAI TeamIdentifier: `2DC432GLL2`
-- browser-client SHA-256: `c52ba09202f0e82caa6f6d2a6463a8635c1b1316567975d9b91c1a05fb5af501`
-- browser-service SHA-256: `6d9fe69bd4a72dcd6fc529bd5c9316933a24ee17478551b25bd8e780bdfc8ae0`
-- Chrome native-host SHA-256: `39d62fff1d203eb6d4b41fff100361f448cd6821b13d00c5626f6ed89178331e`
-- Chrome native host: `com.openai.codexextension`
-- Chrome extension ID: `hehggadaopoacecdllhhajmbjkdcmajg`
-- tunnel-client: `0.0.13`
-
-Identity mismatches always fail closed. Hash changes fail until they pass the explicit local review command documented below.
+The long-lived Local Chrome process watches the signed app generation. It revalidates and swaps its BrowserJack child after a compatible update, while keeping the tunnel process alive but returning explicit unavailable errors for an unapproved or incompatible generation.
 
 BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing behavior used by this tested build. `scripts/prepare-browserjack.sh` builds a pinned BrowserJack checkout with the narrow compatibility adaptation used by this project and makes the live doctor require a real Chrome backend. The tested build continues to run BrowserJack inside its restricted outer Codex sandbox. No OpenAI binary, extension, browser profile, or app bundle is modified or redistributed.
 
@@ -88,22 +77,23 @@ bash scripts/bootstrap-local.sh
 The bootstrap installs/validates local prerequisites and builds the pinned BrowserJack compatibility runtime under:
 
 ```text
-~/Library/Application Support/chatgpt-browser-bridge/browserjack/8ee11377-compat-v1
+~/.codex/chatgpt-browser-bridge/browserjack/8ee11377-compat-v1
 ```
 
 It does not modify `ChatGPT.app`, Chrome, the OpenAI Chrome extension, or your browser profile.
 
 ### Review a real browser-runtime change
 
-If a desktop update changes one of the approved browser component hashes, review it interactively:
+If you want an explicit review of a desktop update that changes an approved browser component hash, run:
 
 ```bash
 bash scripts/review-browserjack-update.sh
 ```
 
-The command verifies the fixed identities, shows only non-secret hashes, stages the candidate for the live doctor and direct Chrome smoke test, and writes the exact approved fingerprint to a private mode-`600` file only after both checks pass. A failed review restores the earlier local compatibility state and leaves Local Chrome stopped.
+The command verifies the fixed identities, shows only non-secret hashes, stages the candidate for the live doctor and direct Chrome smoke test, and writes the exact approved fingerprint to a private mode-`600` file only after both checks pass. Normal service startup also performs the signed candidate live self-test without a repository hash change. A failed review restores the earlier local compatibility state and leaves Local Chrome stopped.
 
 Local approvals are stored outside the repository at `~/.config/chatgpt-browser-bridge/browser-runtime-approvals.json`. App version/build changes with an already approved fingerprint need no command or repository edit; BrowserJack self-tests each new build once.
+The prepared adapter and bridge-owned BrowserJack verified-build cache live under `${CODEX_HOME:-$HOME/.codex}/chatgpt-browser-bridge/browserjack` because the OpenAI Browser sandbox allows writes under `CODEX_HOME`. Launchd logs and unrelated outer state remain unchanged.
 
 ## 3. Connect the tunnel
 

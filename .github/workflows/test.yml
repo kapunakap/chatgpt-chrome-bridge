@@ -24,15 +24,41 @@ jobs:
           node --check scripts/browserjack-fingerprint.test.mjs
           node --check scripts/browserjack-discovery-compat.mjs
           node --check scripts/browserjack-discovery-compat.test.mjs
+          node --check scripts/browserjack-runtime.mjs
+          node --check scripts/browserjack-runtime.test.mjs
+          node --check scripts/browserjack-live-probe.mjs
+          node --check scripts/browserjack-live-probe.test.mjs
+          node --check scripts/browserjack-supervisor.mjs
+          node --check scripts/browserjack-supervisor.test.mjs
       - name: Test discovery compatibility wrapper
         run: node --test scripts/browserjack-discovery-compat.test.mjs
       - name: Test browser-runtime fingerprint policy
         run: |
           node --test scripts/browserjack-fingerprint.test.mjs
+          node --test scripts/browserjack-runtime.test.mjs
+          node --test scripts/browserjack-live-probe.test.mjs
+          node --test scripts/browserjack-supervisor.test.mjs
           bash scripts/review-browserjack-update.test.sh
       - name: Reject machine-specific public defaults
         shell: bash
         run: |
+          prepared_root_fragment='${CODEX_HOME:-$HOME/.codex}/chatgpt-browser-bridge/browserjack/$ADAPTER_ID'
+          for script in scripts/browserjack-current.sh scripts/prepare-browserjack.sh scripts/review-browserjack-update.sh; do
+            if ! grep -Fq "$prepared_root_fragment" "$script"; then
+              echo "Missing CODEX_HOME prepared adapter default in $script." >&2
+              exit 1
+            fi
+          done
+          legacy_prepared_root='Library/Application Support/chatgpt-browser-bridge/browserjack'
+          if git grep -n -F "$legacy_prepared_root" -- scripts README.md SECURITY.md; then
+            echo 'Do not commit the old prepared adapter path.' >&2
+            exit 1
+          fi
+          legacy_verified_builds='Library/Application Support/browserjack/verified-builds.json'
+          if git grep -n -F "$legacy_verified_builds" -- scripts README.md SECURITY.md; then
+            echo 'Do not commit the old BrowserJack verified-build default.' >&2
+            exit 1
+          fi
           user_home_prefix='/Users'
           if git grep -n "${user_home_prefix}/"; then
             echo 'Do not commit absolute user home paths.' >&2

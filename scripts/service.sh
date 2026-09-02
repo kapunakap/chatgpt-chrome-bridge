@@ -17,6 +17,7 @@ SERVICE_PATH="${LOCAL_CHROME_SERVICE_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/u
 GUI_DOMAIN="gui/$(id -u)"
 SERVICE_TARGET="$GUI_DOMAIN/$LABEL"
 TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -55,6 +56,7 @@ validate_inputs() {
   require_command plutil
   require_command python3
   require_command tunnel-client
+  [[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
   [[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
   "$TUNNEL_CLIENT_SHIM" --version >/dev/null
   [[ "$ALIAS" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid tunnel alias: $ALIAS"
@@ -70,7 +72,7 @@ service_loaded() {
 runtime_running() {
   local status_json=''
 
-  status_json="$(tunnel-client runtimes --json status "$ALIAS" 2>/dev/null)" || return 1
+  status_json="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>/dev/null)" || return 1
   STATUS_JSON="$status_json" python3 - <<'PY'
 import json
 import os
@@ -114,6 +116,13 @@ wait_for_runtime_ready() {
       printf 'launch_agent_loaded=true\n'
       printf 'process_running=true\n'
       printf 'healthy=true\n'
+      printf 'browser_probe_pending=true\n'
+      if ! "$BROWSERJACK_SHIM" doctor --live --json >/dev/null 2>&1; then
+        printf 'browser_ready=false\n'
+        fail "BrowserJack live doctor failed; the tunnel is alive but Local Chrome is not ready."
+      fi
+      printf 'browser_probe_passed=true\n'
+      printf 'browser_ready=true\n'
       printf 'ready=true\n'
       return 0
     fi
@@ -124,7 +133,7 @@ wait_for_runtime_ready() {
 
 stop_runtime_if_running() {
   if runtime_running; then
-    tunnel-client runtimes --json stop "$ALIAS" >/dev/null
+    "$TUNNEL_CLIENT_SHIM" runtimes --json stop "$ALIAS" >/dev/null
     wait_for_runtime_stop
   fi
 }
@@ -285,9 +294,17 @@ service_status() {
   local pid=''
   local umask_value=''
   local running=false
+  local tunnel_status=''
+  local tunnel_status_rc=0
+  local tunnel_process_running=false
+  local tunnel_healthy=false
+  local tunnel_ready=false
+  local browser_ready=false
+  local tunnel_fields=''
 
   require_macos
   require_command launchctl
+  require_command tunnel-client
   printf 'launch_agent_label=%s\n' "$LABEL"
   if [[ -f "$PLIST_PATH" ]]; then
     printf 'launch_agent_installed=true\n'
@@ -310,7 +327,47 @@ service_status() {
   printf 'launch_agent_running=%s\n' "$running"
   [[ -n "$pid" ]] && printf 'launch_agent_pid=%s\n' "$pid"
   [[ -n "$umask_value" ]] && printf 'launch_agent_umask=%s\n' "$umask_value"
-  [[ "$running" == true ]] || return 2
+
+  set +e
+  tunnel_status="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>/dev/null)"
+  tunnel_status_rc=$?
+  set -e
+  if [[ "$tunnel_status_rc" -eq 0 ]]; then
+    tunnel_fields="$(TUNNEL_STATUS="$tunnel_status" python3 -c '
+import json
+import os
+value = json.loads(os.environ["TUNNEL_STATUS"])
+for key in ("process_running", "healthy", "ready"):
+    print(f"tunnel_{key}={str(value.get(key) is True).lower()}")
+print("tunnel_runtime_state=" + str(value.get("runtime_state", "unknown")))
+')"
+    while IFS= read -r line; do
+      case "$line" in
+        tunnel_process_running=true) tunnel_process_running=true ;;
+        tunnel_healthy=true) tunnel_healthy=true ;;
+        tunnel_ready=true) tunnel_ready=true ;;
+        tunnel_runtime_state=*) printf '%s\n' "$line" ;;
+      esac
+    done <<<"$tunnel_fields"
+  else
+    printf 'tunnel_runtime_state=unavailable\n'
+  fi
+  printf 'launch_agent_owns_process=%s\n' "$running"
+  printf 'tunnel_process_running=%s\n' "$tunnel_process_running"
+  printf 'tunnel_alive=%s\n' "$running"
+  printf 'tunnel_healthy=%s\n' "$tunnel_healthy"
+  printf 'tunnel_ready=%s\n' "$tunnel_ready"
+
+  if [[ -x "$BROWSERJACK_SHIM" ]] && "$BROWSERJACK_SHIM" doctor --live --json >/dev/null 2>&1; then
+    browser_ready=true
+  fi
+  printf 'browser_ready=%s\n' "$browser_ready"
+  if [[ "$running" == true && "$tunnel_healthy" == true && "$tunnel_ready" == true && "$browser_ready" == true ]]; then
+    printf 'service_ready=true\n'
+    return 0
+  fi
+  printf 'service_ready=false\n'
+  return 2
 }
 
 uninstall_service() {

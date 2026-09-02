@@ -34,11 +34,13 @@ The bridge separates browser-runtime trust from app-build compatibility. Before 
 
 An app version or build number is not itself a trust boundary. When all approved identities and component hashes are unchanged, BrowserJack performs a one-time live self-test for the exact app version, build, plugin version, architecture, and browser-client hash. Failed self-tests are not recorded.
 
-Changed component hashes remain blocked until `scripts/review-browserjack-update.sh` stages the exact candidate, passes the live doctor and direct Chrome smoke test, and writes a user-owned mode-`600` local approval. Identity changes cannot be approved by that command and require a checked-in review. The local approval file contains hashes and build metadata only.
+Changed component hashes remain blocked from serving until a signed candidate path passes the real live doctor. The long-lived launcher then writes only that exact candidate fingerprint to the user-owned mode-`600` local approval file after success; `scripts/review-browserjack-update.sh` remains available for an explicit review that also runs the direct Chrome smoke test. Identity changes cannot be approved by these runtime paths and require a checked-in review. The local approval file contains hashes and build metadata only.
+
+The prepared adapter and bridge-owned BrowserJack verified-build cache live under `${CODEX_HOME:-$HOME/.codex}/chatgpt-browser-bridge/browserjack` because the OpenAI Browser sandbox allows writes under `CODEX_HOME`. Launchd logs and unrelated outer state remain unchanged.
 
 The prepared BrowserJack checkout retains BrowserJack's cache/browser-client integrity checks. The narrow local patch exists because BrowserJack 0.3.0 does not understand the tested OpenAI build's current signing/layout behavior. The patch does not modify or redistribute OpenAI binaries.
 
-Any unknown hash or identity mismatch must fail closed until reviewed. Do not solve compatibility failures by globally disabling signature, identity, fingerprint, or self-test checks.
+Any unknown hash or identity mismatch must fail closed until the signed candidate has passed its allowed compatibility test; identity mismatches remain blocked. Do not solve compatibility failures by globally disabling signature, identity, fingerprint, or self-test checks.
 
 ## Network boundary
 

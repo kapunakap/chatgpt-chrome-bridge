@@ -31,6 +31,7 @@ inspect_app() {
   for path in \
     "$plugin_root/.codex-plugin/plugin.json" \
     "$plugin_root/scripts/extension-id.json" \
+    "$plugin_root/scripts/extension-ids.json" \
     "$plugin_root/scripts/browser-client.mjs" \
     "$app/Contents/Resources/cua_node/manifest.json" \
     "$app/Contents/Resources/codex"
@@ -44,7 +45,7 @@ inspect_app() {
 
   echo "-- matching files anywhere under app Resources --"
   find "$app/Contents/Resources" \
-    \( -name 'extension-id.json' -o -name 'browser-client.mjs' -o -path '*/.codex-plugin/plugin.json' \) \
+    \( -name 'extension-id.json' -o -name 'extension-ids.json' -o -name 'browser-client.mjs' -o -path '*/.codex-plugin/plugin.json' \) \
     -print 2>/dev/null | sort | redact_home || true
   echo
 }
@@ -59,7 +60,7 @@ cache_root="$HOME/.codex/plugins/cache/openai-bundled/chrome"
 if [[ -d "$cache_root" ]]; then
   echo "present=true"
   find "$cache_root" \
-    \( -name 'extension-id.json' -o -name 'browser-client.mjs' -o -path '*/.codex-plugin/plugin.json' \) \
+    \( -name 'extension-id.json' -o -name 'extension-ids.json' -o -name 'browser-client.mjs' -o -path '*/.codex-plugin/plugin.json' \) \
     -print 2>/dev/null | sort | redact_home || true
   if [[ -e "$cache_root/latest" ]]; then
     printf 'latest='; realpath "$cache_root/latest" 2>/dev/null | redact_home || true

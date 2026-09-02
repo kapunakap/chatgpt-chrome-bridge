@@ -9,6 +9,7 @@ SERVICE_LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-b
 SERVICE_PLIST="${LOCAL_CHROME_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist}"
 SERVICE_TARGET="gui/$(id -u)/$SERVICE_LABEL"
 launch_agent_running=false
+browser_ready=false
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -47,22 +48,35 @@ else
 fi
 
 printf '\n== BrowserJack status ==\n'
+set +e
 "$BROWSERJACK_SHIM" status --json
+browser_status_rc=$?
+set -e
+printf 'browserjack_status_exit=%s\n' "$browser_status_rc"
 
 printf '\n== BrowserJack live doctor ==\n'
-"$BROWSERJACK_SHIM" doctor --live --json
+if "$BROWSERJACK_SHIM" doctor --live --json; then
+  browser_ready=true
+  printf 'browser_ready=true\n'
+else
+  printf 'browser_ready=false\n'
+fi
 
 printf '\n== Tunnel runtime status (%s) ==\n' "$ALIAS"
 status_json="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS")"
 printf '%s\n' "$status_json"
 
-STATUS_JSON="$status_json" LAUNCH_AGENT_RUNNING="$launch_agent_running" node <<'NODE'
+STATUS_JSON="$status_json" LAUNCH_AGENT_RUNNING="$launch_agent_running" BROWSER_READY="$browser_ready" node <<'NODE'
 const s = JSON.parse(process.env.STATUS_JSON);
+const launchAgentOwnsProcess = process.env.LAUNCH_AGENT_RUNNING === "true";
 const checks = {
-  process_running: s.process_running === true || process.env.LAUNCH_AGENT_RUNNING === "true",
+  process_running: s.process_running === true || launchAgentOwnsProcess,
   healthy: s.healthy === true,
   ready: s.ready === true,
+  browser_ready: process.env.BROWSER_READY === "true",
 };
+console.log(`tunnel_process_running=${s.process_running === true ? 'true' : 'false'}`);
+console.log(`launch_agent_owns_process=${launchAgentOwnsProcess ? 'true' : 'false'}`);
 for (const [name, ok] of Object.entries(checks)) {
   console.log(`${name}=${ok ? 'true' : 'false'}`);
 }

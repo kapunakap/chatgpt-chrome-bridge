@@ -50,12 +50,26 @@ function request(id, method, params) {
   });
 }
 
-const timeout = setTimeout(() => {
-  for (const waiter of pending.values()) {
-    waiter.reject(new Error("BrowserJack MCP smoke test timed out"));
-  }
+function rejectPending(error) {
+  for (const waiter of pending.values()) waiter.reject(error);
   pending.clear();
-  if (child.pid) process.kill(-child.pid, "SIGKILL");
+}
+
+child.once("error", (error) => rejectPending(new Error(`BrowserJack process failed to start: ${error.message}`)));
+child.once("exit", (code, signal) => {
+  if (pending.size === 0) return;
+  rejectPending(new Error(`BrowserJack exited before completing MCP smoke (${signal ?? `code ${code ?? 1}`})`));
+});
+
+const timeout = setTimeout(() => {
+  rejectPending(new Error("BrowserJack MCP smoke test timed out"));
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      // The child may already have exited.
+    }
+  }
 }, timeoutMs);
 
 try {

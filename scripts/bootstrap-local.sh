@@ -65,10 +65,23 @@ tunnel_client_version="${tunnel_client_version_full%%+*}"
 printf 'tunnel-client: %s\n' "$("$TUNNEL_CLIENT_SHIM" --version)"
 
 printf '\n== Preparing pinned BrowserJack compatibility runtime ==\n'
-bash "$REPO_ROOT/scripts/prepare-browserjack.sh"
+runtime_approved=false
+if node "$REPO_ROOT/scripts/browserjack-fingerprint.mjs" assert \
+  --app "$CHATGPT_APP" \
+  --manifest "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json" >/dev/null 2>&1; then
+  runtime_approved=true
+  bash "$REPO_ROOT/scripts/prepare-browserjack.sh"
+else
+  printf 'Current signed runtime is an unapproved candidate; preparing it for the real live self-test.\n'
+  BROWSERJACK_ALLOW_UNAPPROVED_CANDIDATE=1 bash "$REPO_ROOT/scripts/prepare-browserjack.sh"
+fi
 
 printf '\n== BrowserJack status ==\n'
-"$REPO_ROOT/scripts/browserjack-current.sh" status --json
+if [[ "$runtime_approved" == true ]]; then
+  "$REPO_ROOT/scripts/browserjack-current.sh" status --json
+else
+  printf 'browser_runtime_approval=pending_live_self_test\n'
+fi
 
 printf '\n== BrowserJack live handshake ==\n'
 "$REPO_ROOT/scripts/browserjack-current.sh" doctor --live --json

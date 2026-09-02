@@ -13,7 +13,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,10 +27,19 @@ const defaultApprovalsFile = join(
   homedir(),
   ".config/chatgpt-browser-bridge/browser-runtime-approvals.json",
 );
-const defaultVerifiedBuildsFile = join(
-  homedir(),
-  "Library/Application Support/browserjack/verified-builds.json",
-);
+export function resolveVerifiedBuildsFile({ env = process.env, home = homedir() } = {}) {
+  const override = env.BROWSERJACK_VERIFIED_BUILDS_FILE;
+  if (override !== undefined) {
+    if (override.length === 0 || !isAbsolute(override)) {
+      throw new Error("BROWSERJACK_VERIFIED_BUILDS_FILE must be a non-empty absolute path");
+    }
+    return resolve(override);
+  }
+  const codexHome = resolve(env.CODEX_HOME ?? join(home, ".codex"));
+  return join(codexHome, "chatgpt-browser-bridge/browserjack/verified-builds.json");
+}
+const CODESIGN = "/usr/bin/codesign";
+const EXTENSION_ID_PATTERN = /^[a-p]{32}$/u;
 
 function requireObject(value, label) {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
@@ -67,6 +76,13 @@ function run(path, args) {
   return { code: result.status ?? 1, output: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
+function assertStrictSignature(path, label) {
+  const result = run(CODESIGN, ["--verify", "--strict", path]);
+  if (result.code !== 0) {
+    throw new Error(`${label} strict signature verification failed: ${result.output.trim()}`);
+  }
+}
+
 function plistValue(appPath, key) {
   const result = run("/usr/libexec/PlistBuddy", ["-c", `Print :${key}`, join(appPath, "Contents/Info.plist")]);
   if (result.code !== 0) throw new Error(`Could not read ${key} from ${appPath}`);
@@ -99,6 +115,107 @@ export function fingerprintFields(snapshot) {
 export function fingerprintDigest(fields) {
   const ordered = fingerprintFields(fields);
   return createHash("sha256").update(JSON.stringify(ordered)).digest("hex");
+}
+
+function parseExtensionId(value, label) {
+  if (typeof value !== "string" || !EXTENSION_ID_PATTERN.test(value)) {
+    throw new Error(`${label} must be a valid Chrome extension ID`);
+  }
+  return value;
+}
+
+function parseExtensionIdArray(value, label) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array`);
+  }
+  return [...new Set(value.map((id) => parseExtensionId(id, `${label}[]`)))];
+}
+
+function extensionHostName(value, source) {
+  return requireString(value.extensionHostName, `${source}.extensionHostName`);
+}
+
+function parseLegacyMetadata(value, source) {
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    throw new Error(`${source} must contain an object`);
+  }
+  const extensionId = parseExtensionId(value.extensionId, `${source}.extensionId`);
+  const extensionIds = Array.isArray(value.extensionIds)
+    ? parseExtensionIdArray(value.extensionIds, `${source}.extensionIds`)
+    : [extensionId];
+  if (!extensionIds.includes(extensionId)) {
+    throw new Error(`${source}.extensionId is not included in extensionIds`);
+  }
+  return {
+    extensionId,
+    extensionIds,
+    extensionHostName: extensionHostName(value, source),
+  };
+}
+
+export function parseLegacyExtensionMetadata(value, source = "scripts/extension-id.json") {
+  return parseLegacyMetadata(value, source);
+}
+
+export function parsePluralExtensionMetadata(value, source = "scripts/extension-ids.json") {
+  if (value === null || Array.isArray(value) || typeof value !== "object") {
+    throw new Error(`${source} must contain an object`);
+  }
+  if (!Array.isArray(value.browserExtensions)) {
+    throw new Error(`${source} must identify a browserFamily=chrome entry`);
+  }
+  const chromeEntries = value.browserExtensions.filter(
+    (entry) => entry && typeof entry === "object" && entry.browserFamily === "chrome",
+  );
+  if (chromeEntries.length !== 1) {
+    throw new Error(`${source} must contain exactly one Chrome browser entry`);
+  }
+  const chrome = chromeEntries[0];
+  const chromeIds = parseExtensionIdArray(chrome.extensionIds, `${source}.browserExtensions[chrome].extensionIds`);
+  const extensionId = parseExtensionId(
+    chrome.storeExtensionId,
+    `${source}.browserExtensions[chrome].storeExtensionId`,
+  );
+  if (!chromeIds.includes(extensionId)) {
+    throw new Error(`${source} Chrome storeExtensionId is not one of the Chrome extension IDs`);
+  }
+  const extensionIds = Array.isArray(value.extensionIds)
+    ? parseExtensionIdArray(value.extensionIds, `${source}.extensionIds`)
+    : [...new Set(value.browserExtensions.flatMap((entry) => (
+      entry && typeof entry === "object" && Array.isArray(entry.extensionIds) ? entry.extensionIds : []
+    )))].map((id) => parseExtensionId(id, `${source}.browserExtensions[].extensionIds[]`));
+  if (!extensionIds.includes(extensionId)) {
+    throw new Error(`${source} Chrome storeExtensionId is not included in extensionIds`);
+  }
+  return {
+    extensionId,
+    extensionIds,
+    extensionHostName: extensionHostName(value, source),
+  };
+}
+
+async function loadSignedExtensionMetadata(pluginPath) {
+  const pluralPath = join(pluginPath, "scripts/extension-ids.json");
+  try {
+    return parsePluralExtensionMetadata(JSON.parse(await readFile(pluralPath, "utf8")), pluralPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const singularPath = join(pluginPath, "scripts/extension-id.json");
+  try {
+    return parseLegacyExtensionMetadata(JSON.parse(await readFile(singularPath, "utf8")), singularPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  throw new Error(`Missing signed ${pluralPath} and ${singularPath}`);
+}
+
+function assertContained(root, candidate, label) {
+  const containment = relative(resolve(root), resolve(candidate));
+  if (containment === ".." || containment.startsWith(`..${sep}`) || isAbsolute(containment)) {
+    throw new Error(`${label} escapes its trusted root: ${candidate}`);
+  }
 }
 
 export function validateIdentity(snapshot, policy) {
@@ -198,7 +315,7 @@ export async function writeApproval(path, snapshot) {
 export async function inspectRuntime({
   appPath = defaultAppPath,
   manifestPath = defaultManifestPath,
-  approvalsFile = defaultApprovalsFile,
+  approvalsFile = process.env.BROWSERJACK_APPROVAL_FILE ?? defaultApprovalsFile,
   policy = undefined,
 } = {}) {
   const trust = policy ?? await loadPolicy();
@@ -211,18 +328,28 @@ export async function inspectRuntime({
     process.arch,
     "ChatGPT for Chrome",
   );
+  assertStrictSignature(appPath, "ChatGPT.app");
+  const extensionMetadata = await loadSignedExtensionMetadata(pluginPath);
   const manifest = await readJson(manifestPath);
-  const nativeHostName = requireString(manifest.name, `${manifestPath}.name`);
-  const nativeHostPath = await realpath(requireString(manifest.path, `${manifestPath}.path`));
+  const nativeHostName = extensionMetadata.extensionHostName;
+  const manifestHostName = requireString(manifest.name, `${manifestPath}.name`);
+  if (manifestHostName !== nativeHostName) {
+    throw new Error(`Native host name ${manifestHostName} does not match signed plugin metadata ${nativeHostName}`);
+  }
+  const configuredNativeHostPath = requireString(manifest.path, `${manifestPath}.path`);
+  if (!isAbsolute(configuredNativeHostPath)) {
+    throw new Error(`Native host path is not absolute: ${configuredNativeHostPath}`);
+  }
+  const nativeHostPath = await realpath(configuredNativeHostPath);
   const cacheRoot = await realpath(join(homedir(), ".codex/plugins/cache/openai-bundled/chrome"));
-  if (nativeHostPath !== cacheRoot && !nativeHostPath.startsWith(`${cacheRoot}${sep}`)) {
-    throw new Error(`Chrome native host escapes the OpenAI plugin cache: ${nativeHostPath}`);
-  }
+  assertContained(cacheRoot, nativeHostPath, "Chrome native host");
   const allowedOrigins = Array.isArray(manifest.allowed_origins) ? manifest.allowed_origins : [];
-  const extensionId = trust.identity.preferredExtensionId;
+  const extensionId = extensionMetadata.extensionId;
   if (!allowedOrigins.includes(`chrome-extension://${extensionId}/`)) {
-    throw new Error(`Preferred Chrome extension ID is not allowed by ${manifestPath}`);
+    throw new Error(`Signed Chrome extension ID is not allowed by ${manifestPath}`);
   }
+  assertStrictSignature(bundledNativeHostPath, "ChatGPT.app Chrome native host");
+  assertStrictSignature(nativeHostPath, "Installed Chrome native host");
   const plugin = await readJson(join(pluginPath, ".codex-plugin/plugin.json"));
   const snapshot = {
     appVersion: plistValue(appPath, "CFBundleShortVersionString"),
@@ -232,6 +359,7 @@ export async function inspectRuntime({
     teamId: teamIdentifier(appPath),
     nativeHostName,
     extensionId,
+    extensionIds: extensionMetadata.extensionIds,
     browserClientSha256: await sha256(clientPath),
     browserServiceSha256: await sha256(servicePath),
     nativeHostSha256: await sha256(nativeHostPath),
@@ -275,7 +403,7 @@ async function main() {
       nativeHostName: policy.identity.nativeHostName,
       preferredExtensionId: policy.identity.preferredExtensionId,
       approvalsFile: defaultApprovalsFile,
-      verifiedBuildsFile: defaultVerifiedBuildsFile,
+      verifiedBuildsFile: resolveVerifiedBuildsFile(),
     };
     if (!(field in values)) throw new Error(`Unknown config field: ${field}`);
     process.stdout.write(`${values[field]}\n`);
