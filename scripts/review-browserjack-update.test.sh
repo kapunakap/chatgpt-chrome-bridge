@@ -15,7 +15,12 @@ snapshot_file "$target" "$backup"
 printf 'after\n' >"$target"
 restore_file "$target" "$backup"
 [[ "$(<"$target")" == "before" ]]
-[[ "$(stat -f '%Lp' "$target" 2>/dev/null || stat -c '%a' "$target")" == "600" ]]
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  target_mode="$(stat -f '%Lp' "$target")"
+else
+  target_mode="$(stat -c '%a' "$target")"
+fi
+[[ "$target_mode" == "600" ]]
 
 absent="$TEST_ROOT/absent.json"
 absent_backup="$TEST_ROOT/absent-backup"
