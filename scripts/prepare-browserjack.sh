@@ -336,19 +336,19 @@ launch_path.write_text(launch.replace(old, new, 1))
 
 launch_test = launch_test_path.read_text()
 old = '''  browserClientSha256: "d".repeat(64),
-  codexHome: "/Users/example/.codex",'''
+  codexHome: "/tmp/example/.codex",'''
 new = '''  browserClientSha256: "d".repeat(64),
-  browserServicePath: "/Users/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-service.mjs",
+  browserServicePath: "/tmp/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-service.mjs",
   browserServiceSha256: "e".repeat(64),
   extensionIds: ["abcdefghijklmnop"],
-  trustedCodePaths: ["/Users/example/.codex/plugins/chrome", "/Users/example/.codex/node_modules"],
+  trustedCodePaths: ["/tmp/example/.codex/plugins/chrome", "/tmp/example/.codex/node_modules"],
   availableBackends: "chrome",
   nativePipeConnectTimeoutMs: "1000",
   buildFlavor: "prod",
   appServerProtocolVersion: 2,
   nativeHostProtocolVersion: 2,
-  registryPath: "/Users/example/registry.json",
-  codexHome: "/Users/example/.codex",'''
+  registryPath: "/tmp/example/registry.json",
+  codexHome: "/tmp/example/.codex",'''
 if old not in launch_test:
     raise SystemExit("BrowserJack launch test runtime no longer matches the pinned upstream commit")
 launch_test = launch_test.replace(old, new, 1)

@@ -78,10 +78,10 @@ test("v2 entries expose the paths needed by trusted browser RPC", () => {
     nodeReplPath: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
     nodePath: "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node",
     nodeModuleDirs: ["/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules"],
-    codexCliPath: "/Users/example/.codex/plugins/.plugin-appserver/codex",
-    browserClientPath: "/Users/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-client.mjs",
-    browserServicePath: "/Users/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-service.mjs",
-    extensionHostPath: "/Users/example/.codex/plugins/cache/openai-bundled/chrome/latest/extension-host/macos/arm64/ChatGPT for Chrome",
+    codexCliPath: "/tmp/example/.codex/plugins/.plugin-appserver/codex",
+    browserClientPath: "/tmp/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-client.mjs",
+    browserServicePath: "/tmp/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-service.mjs",
+    extensionHostPath: "/tmp/example/.codex/plugins/cache/openai-bundled/chrome/latest/extension-host/macos/arm64/ChatGPT for Chrome",
   } };
   const selected = selectV2RuntimeEntry({ schemaVersion: 2, entries: [entry] }, {
     appVersion: "26.831.21537",

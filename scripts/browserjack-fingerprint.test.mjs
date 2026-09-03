@@ -55,7 +55,7 @@ test("version and build metadata do not change the content fingerprint", () => {
 
 test("verified-build path defaults under CODEX_HOME and rejects invalid overrides", () => {
   assert.equal(
-    resolveVerifiedBuildsFile({ env: { CODEX_HOME: "/tmp/codex" }, home: "/Users/example" }),
+    resolveVerifiedBuildsFile({ env: { CODEX_HOME: "/tmp/codex" }, home: "/tmp/example" }),
     "/tmp/codex/chatgpt-browser-bridge/browserjack/verified-builds.json",
   );
   assert.equal(

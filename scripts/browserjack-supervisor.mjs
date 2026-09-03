@@ -9,12 +9,12 @@ import { inspectRuntime, writeApproval } from "./browserjack-fingerprint.mjs";
 import { resolveRuntime } from "./browserjack-runtime.mjs";
 
 const defaultManifest = join(
-  process.env.HOME || "/Users/unknown",
+  process.env.HOME || "/unknown",
   "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json",
 );
 const defaultApp = "/Applications/ChatGPT.app";
 const defaultApprovalsFile = join(
-  process.env.HOME || "/Users/unknown",
+  process.env.HOME || "/unknown",
   ".config/chatgpt-browser-bridge/browser-runtime-approvals.json",
 );
 const defaultPollMs = 5_000;
