@@ -282,10 +282,35 @@ live = live.replace(old, new, 1)
 live_path.write_text(live)
 
 server = server_path.read_text()
+old = '''import { pathToFileURL } from "node:url";'''
+new = '''import { join } from "node:path";
+import { pathToFileURL } from "node:url";'''
+if old not in server:
+    raise SystemExit("BrowserJack runtime URL imports no longer match the pinned upstream commit")
+server = server.replace(old, new, 1)
+
 old = '''    "Import that exact URL and call setupBrowserRuntime({ globals: globalThis }) before using agent.browsers.",'''
 new = '''    "Import that exact URL and assign globalThis.agent = await setupBrowserRuntime() before using agent.browsers.",'''
 if old not in server:
     raise SystemExit("BrowserJack runtime instructions no longer match the pinned upstream commit")
+server = server.replace(old, new, 1)
+
+old = '''  const browserClientUrl = pathToFileURL(launch.runtime.browserClientPath).href;'''
+new = '''  const browserClientUrl = pathToFileURL(
+    join(
+      launch.runtime.appPath,
+      "Contents",
+      "Resources",
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      "chrome",
+      "scripts",
+      "browser-client.mjs",
+    ),
+  ).href;'''
+if old not in server:
+    raise SystemExit("BrowserJack browser-client instruction URL no longer matches the pinned upstream commit")
 server = server.replace(old, new, 1)
 server_path.write_text(server)
 
@@ -335,8 +360,7 @@ if old not in launch:
 launch_path.write_text(launch.replace(old, new, 1))
 
 launch_test = launch_test_path.read_text()
-old = '''  browserClientSha256: "d".repeat(64),
-  codexHome: "/tmp/example/.codex",'''
+old = '''  browserClientSha256: "d".repeat(64),'''
 new = '''  browserClientSha256: "d".repeat(64),
   browserServicePath: "/tmp/example/.codex/plugins/cache/openai-bundled/chrome/latest/scripts/browser-service.mjs",
   browserServiceSha256: "e".repeat(64),
@@ -347,8 +371,7 @@ new = '''  browserClientSha256: "d".repeat(64),
   buildFlavor: "prod",
   appServerProtocolVersion: 2,
   nativeHostProtocolVersion: 2,
-  registryPath: "/tmp/example/registry.json",
-  codexHome: "/tmp/example/.codex",'''
+  registryPath: "/tmp/example/registry.json",'''
 if old not in launch_test:
     raise SystemExit("BrowserJack launch test runtime no longer matches the pinned upstream commit")
 launch_test = launch_test.replace(old, new, 1)

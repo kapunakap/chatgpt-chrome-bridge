@@ -30,6 +30,7 @@ jobs:
           node --check scripts/browserjack-live-probe.test.mjs
           node --check scripts/browserjack-supervisor.mjs
           node --check scripts/browserjack-supervisor.test.mjs
+          node --check scripts/prepare-browserjack.test.mjs
       - name: Test discovery compatibility wrapper
         run: node --test scripts/browserjack-discovery-compat.test.mjs
       - name: Test browser-runtime fingerprint policy
@@ -38,6 +39,7 @@ jobs:
           node --test scripts/browserjack-runtime.test.mjs
           node --test scripts/browserjack-live-probe.test.mjs
           node --test scripts/browserjack-supervisor.test.mjs
+          node --test scripts/prepare-browserjack.test.mjs
           bash scripts/review-browserjack-update.test.sh
       - name: Reject machine-specific public defaults
         shell: bash
