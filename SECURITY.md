@@ -36,6 +36,8 @@ An app version or build number is not itself a trust boundary. When all approved
 
 Changed component hashes remain blocked from serving until a signed candidate path passes the real live doctor. The long-lived launcher then writes only that exact candidate fingerprint to the user-owned mode-`600` local approval file after success; `scripts/review-browserjack-update.sh` remains available for an explicit review that also runs the direct Chrome smoke test. Identity changes cannot be approved by these runtime paths and require a checked-in review. The local approval file contains hashes and build metadata only.
 
+After a new signed generation passes these checks, the supervisor exits instead of replacing BrowserJack inside the existing process-affine tunnel stdio session. `tunnel-client` shuts down when the MCP child closes, and launchd `KeepAlive` starts a fresh tunnel-client and BrowserJack stack. A rejected generation stays in the existing blocked supervisor and returns unavailable errors; it does not repeatedly exit into a launchd restart loop. Same-generation transient child failures may still recover BrowserJack in-process.
+
 The prepared adapter and bridge-owned BrowserJack verified-build cache live under `${CODEX_HOME:-$HOME/.codex}/chatgpt-browser-bridge/browserjack` because the OpenAI Browser sandbox allows writes under `CODEX_HOME`. Launchd logs and unrelated outer state remain unchanged.
 
 The prepared BrowserJack checkout retains BrowserJack's cache/browser-client integrity checks. The narrow local patch exists because BrowserJack 0.3.0 does not understand the tested OpenAI build's current signing/layout behavior. The patch does not modify or redistribute OpenAI binaries.

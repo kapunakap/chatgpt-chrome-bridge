@@ -91,6 +91,36 @@ export function generationChanged(previous, current) {
   return runtimeGeneration(previous) !== runtimeGeneration(current);
 }
 
+export function shouldRevalidateRuntime({
+  activeSnapshot,
+  currentSnapshot,
+  blockedGeneration = null,
+  blockedRetryable = false,
+  blockedRetryAt = 0,
+  now = Date.now(),
+}) {
+  const currentGeneration = runtimeGeneration(currentSnapshot);
+  if (generationChanged(activeSnapshot, currentSnapshot) && blockedGeneration !== currentGeneration) {
+    return true;
+  }
+  return blockedRetryable &&
+    blockedGeneration === currentGeneration &&
+    now >= blockedRetryAt;
+}
+
+export async function applySuccessfulRevalidation(
+  previousSnapshot,
+  latestSnapshot,
+  { requestOuterRestart, restartChildInProcess },
+) {
+  if (generationChanged(previousSnapshot, latestSnapshot)) {
+    await requestOuterRestart();
+    return "restart-outer";
+  }
+  await restartChildInProcess();
+  return "restart-child";
+}
+
 export function blockedResponse(line, reason) {
   let message;
   try {
@@ -260,6 +290,8 @@ async function main() {
   let replaySequence = 0;
   let childWriteChain = Promise.resolve();
   let childOutputChain = Promise.resolve();
+  let poll = null;
+  let input = null;
 
   function protocolLog(message) {
     process.stderr.write(`browserjack: ${message}\n`);
@@ -539,6 +571,28 @@ async function main() {
     process.stderr.write(`browserjack: Local Chrome blocked until runtime revalidation succeeds: ${reason}\n`);
   }
 
+  async function requestOuterRestart(latest) {
+    stopping = true;
+    if (poll) {
+      clearInterval(poll);
+      poll = null;
+    }
+    clearHandshakeTimer();
+    clearPendingTimer();
+    handshake = null;
+    pendingMessages = [];
+    pendingBytes = 0;
+    input?.close();
+    const child = activeChild;
+    activeChild = null;
+    await stopChild(child);
+    process.stderr.write(
+      `browserjack: compatible ChatGPT.app ${latest.appVersion} build ${latest.buildVersion} validated; ` +
+      "exiting supervisor to request a fresh outer tunnel-client and BrowserJack stdio session\n",
+    );
+    process.exitCode = 0;
+  }
+
   async function revalidate(snapshot) {
     if (transitioning || stopping) return;
     transitioning = true;
@@ -580,18 +634,25 @@ async function main() {
         process.stderr.write(`browserjack: locally approved exact runtime ${latest.fingerprint} after live self-test\n`);
       }
 
-      const oldChild = activeChild;
-      activeChild = null;
-      await stopChild(oldChild);
-      activeSnapshot = latest;
-      activeRuntime = candidateRuntime;
-      blockedReason = null;
-      blockedGeneration = null;
-      blockedRetryable = false;
-      blockedRetryAt = 0;
-      retryAttempt = 0;
-      startChild(candidateRuntime);
-      process.stderr.write(`browserjack: restarted BrowserJack for ChatGPT.app ${latest.appVersion} build ${latest.buildVersion}\n`);
+      await applySuccessfulRevalidation(activeSnapshot, latest, {
+        requestOuterRestart: () => requestOuterRestart(latest),
+        restartChildInProcess: async () => {
+          const oldChild = activeChild;
+          activeChild = null;
+          await stopChild(oldChild);
+          activeSnapshot = latest;
+          activeRuntime = candidateRuntime;
+          blockedReason = null;
+          blockedGeneration = null;
+          blockedRetryable = false;
+          blockedRetryAt = 0;
+          retryAttempt = 0;
+          startChild(candidateRuntime);
+          process.stderr.write(
+            `browserjack: restarted BrowserJack in-process for unchanged ChatGPT.app ${latest.appVersion} build ${latest.buildVersion}\n`,
+          );
+        },
+      });
     } catch (error) {
       await setBlocked(`runtime revalidation failed: ${error.message}`);
     } finally {
@@ -611,18 +672,17 @@ async function main() {
     await setBlocked(`initial signed runtime resolution failed: ${error.message}`, true);
   }
 
-  const poll = setInterval(async () => {
+  poll = setInterval(async () => {
     if (stopping || transitioning || !activeSnapshot) return;
     try {
       const current = await inspectRuntime({ appPath, manifestPath, approvalsFile });
-      const currentGeneration = runtimeGeneration(current);
-      const changed = generationChanged(activeSnapshot, current);
-      const retryableFailure = blockedRetryable &&
-        blockedGeneration === currentGeneration &&
-        Date.now() >= blockedRetryAt;
-      if ((changed || retryableFailure) && blockedGeneration !== currentGeneration) {
-        await revalidate(current);
-      } else if (retryableFailure) {
+      if (shouldRevalidateRuntime({
+        activeSnapshot,
+        currentSnapshot: current,
+        blockedGeneration,
+        blockedRetryable,
+        blockedRetryAt,
+      })) {
         await revalidate(current);
       }
     } catch (error) {
@@ -631,7 +691,7 @@ async function main() {
   }, pollMs);
   poll.unref();
 
-  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const handleSignal = (signal) => {
     if (stopping) return;
     stopping = true;
