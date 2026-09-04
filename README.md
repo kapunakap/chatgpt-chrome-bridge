@@ -25,7 +25,7 @@ The bridge is deliberately fail-closed to an exact browser-runtime fingerprint r
 
 When signed browser content is unchanged, a new app version/build is tested once by the local BrowserJack runtime and cached as an exact per-build result. A changed browser fingerprint is admitted only through a real live self-test; the exact fingerprint is written to the private local approval file only after that test succeeds. Identity, signature, byte-identity, and containment mismatches always fail closed.
 
-The long-lived Local Chrome process watches the signed app generation. It revalidates and swaps its BrowserJack child after a compatible update, while keeping the tunnel process alive but returning explicit unavailable errors for an unapproved or incompatible generation.
+The Local Chrome supervisor watches the signed app generation. After a compatible update, it revalidates the new generation and exits instead of swapping BrowserJack under the existing process-affine stdio connection. `tunnel-client` then shuts down, and the launchd `KeepAlive` service starts a fresh tunnel-client process, supervisor, BrowserJack child, and MCP session. An unapproved or incompatible generation remains fail-closed in the existing supervisor with explicit unavailable errors, without repeatedly exiting into a launchd restart loop.
 
 BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing behavior used by this tested build. `scripts/prepare-browserjack.sh` builds a pinned BrowserJack checkout with the narrow compatibility adaptation used by this project and makes the live doctor require a real Chrome backend. The tested build continues to run BrowserJack inside its restricted outer Codex sandbox. No OpenAI binary, extension, browser profile, or app bundle is modified or redistributed.
 
@@ -121,7 +121,7 @@ After the first connection succeeds, install the user-level macOS LaunchAgent:
 bash scripts/service.sh install
 ```
 
-The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the replacement process to become running, healthy, and ready. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits.
+The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the replacement process to become running, healthy, and ready. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits. This whole-stack restart is also how a compatible ChatGPT app generation change gets a fresh stdio MCP session after validation; a manual non-launchd connection must be started again by the user.
 
 The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.13` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
 

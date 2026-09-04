@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applySuccessfulRevalidation,
   blockedResponse,
   generationChanged,
   isTransientBrowserFailure,
@@ -11,6 +12,7 @@ import {
   replayInitialization,
   retryDelay,
   runtimeGeneration,
+  shouldRevalidateRuntime,
 } from "./browserjack-supervisor.mjs";
 
 const runtime = {
@@ -26,6 +28,81 @@ test("runtime generation includes content and app build identity", () => {
   assert.equal(generationChanged(runtime, { ...runtime, buildVersion: "7580" }), true);
   assert.equal(generationChanged(runtime, { ...runtime, fingerprint: "b".repeat(64) }), true);
   assert.equal(generationChanged(runtime, { ...runtime, extensionIds: ["chrome"] }), true);
+});
+
+test("unchanged generation stays in the current supervisor process", () => {
+  assert.equal(shouldRevalidateRuntime({
+    activeSnapshot: runtime,
+    currentSnapshot: { ...runtime },
+  }), false);
+});
+
+test("compatible generation change requests an outer restart without replacement or replay", async () => {
+  let outerRestarts = 0;
+  let replacements = 0;
+  let replays = 0;
+  const action = await applySuccessfulRevalidation(
+    runtime,
+    { ...runtime, buildVersion: "7580" },
+    {
+      requestOuterRestart: async () => { outerRestarts += 1; },
+      restartChildInProcess: async () => {
+        replacements += 1;
+        replays += 1;
+      },
+    },
+  );
+
+  assert.equal(action, "restart-outer");
+  assert.equal(outerRestarts, 1);
+  assert.equal(replacements, 0);
+  assert.equal(replays, 0);
+});
+
+test("incompatible generation remains blocked without an outer restart loop", () => {
+  const changed = { ...runtime, buildVersion: "7580" };
+  const changedGeneration = runtimeGeneration(changed);
+  assert.equal(shouldRevalidateRuntime({
+    activeSnapshot: runtime,
+    currentSnapshot: changed,
+  }), true);
+  assert.equal(shouldRevalidateRuntime({
+    activeSnapshot: runtime,
+    currentSnapshot: changed,
+    blockedGeneration: changedGeneration,
+    blockedRetryable: false,
+  }), false);
+});
+
+test("ordinary same-generation child crash retries and restarts in-process", async () => {
+  const retryAt = 5_000;
+  const generation = runtimeGeneration(runtime);
+  assert.equal(shouldRevalidateRuntime({
+    activeSnapshot: runtime,
+    currentSnapshot: { ...runtime },
+    blockedGeneration: generation,
+    blockedRetryable: true,
+    blockedRetryAt: retryAt,
+    now: retryAt - 1,
+  }), false);
+  assert.equal(shouldRevalidateRuntime({
+    activeSnapshot: runtime,
+    currentSnapshot: { ...runtime },
+    blockedGeneration: generation,
+    blockedRetryable: true,
+    blockedRetryAt: retryAt,
+    now: retryAt,
+  }), true);
+
+  let outerRestarts = 0;
+  let replacements = 0;
+  const action = await applySuccessfulRevalidation(runtime, { ...runtime }, {
+    requestOuterRestart: async () => { outerRestarts += 1; },
+    restartChildInProcess: async () => { replacements += 1; },
+  });
+  assert.equal(action, "restart-child");
+  assert.equal(outerRestarts, 0);
+  assert.equal(replacements, 1);
 });
 
 test("blocked supervisor requests return JSON-RPC errors and ignore notifications", () => {
