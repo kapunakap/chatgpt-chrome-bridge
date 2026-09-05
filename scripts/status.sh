@@ -84,3 +84,5 @@ if (!Object.values(checks).every(Boolean)) process.exit(2);
 NODE
 
 printf '\nBRIDGE_LOCAL_READY=1\n'
+printf 'browser_operation_verified=not_checked\n'
+printf 'NOTE: Readiness covers startup and backend discovery. Run browserjack-mcp-smoke.mjs for page-operation acceptance.\n'

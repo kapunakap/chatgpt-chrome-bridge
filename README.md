@@ -31,6 +31,10 @@ BrowserJack 0.3.0 does not understand the current OpenAI desktop layout/signing 
 
 ## Requirements
 
+Successful `js_reset` responses and the live `js` tool description include the current signed-app bootstrap URL. Literal dynamic imports of removed versioned browser clients are rejected with current guidance before execution; calls are never rewritten or replayed. Computed import expressions are left to the runtime.
+
+`BRIDGE_LOCAL_READY=1` covers startup and backend discovery only. Page-operation acceptance requires `node scripts/browserjack-mcp-smoke.mjs`; failures include the exact smoke stage.
+
 - macOS on Apple Silicon
 - official ChatGPT/Codex desktop app installed at `/Applications/ChatGPT.app`
 - the official ChatGPT/Codex Chrome integration already installed and working in Chrome

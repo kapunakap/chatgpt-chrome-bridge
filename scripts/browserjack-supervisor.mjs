@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { inspectRuntime, writeApproval } from "./browserjack-fingerprint.mjs";
 import { resolveRuntime } from "./browserjack-runtime.mjs";
+import { bootstrapGuidance, addGuidance, missingVersionedClient } from "./browserjack-guidance.mjs";
 
 const defaultManifest = join(
   process.env.HOME || "/unknown",
@@ -19,7 +20,9 @@ const defaultApprovalsFile = join(
 );
 const defaultPollMs = 5_000;
 const maxDiagnosticBytes = 16_384;
-const mcpHandshakeTimeoutMs = 5_000;
+// Cold-starting the verified Node REPL can exceed five seconds after a desktop update.
+// Keep initialization bounded, but allow one normal runtime startup to complete.
+const mcpHandshakeTimeoutMs = 15_000;
 const maxPendingMcpMessages = 32;
 const maxPendingMcpBytes = 1_048_576;
 const mcpInitializationErrorCode = -32002;
@@ -268,6 +271,8 @@ async function main() {
   const approvalsFile = process.env.BROWSERJACK_APPROVAL_FILE || defaultApprovalsFile;
   const pollMs = numberEnv("BROWSERJACK_RUNTIME_POLL_MS", defaultPollMs);
   const baseEnv = { ...process.env };
+  const requests = new Map();
+  const guidance = bootstrapGuidance(appPath);
 
   let activeSnapshot;
   let activeRuntime;
@@ -368,6 +373,8 @@ async function main() {
   }
 
   function queueChildLine(child, line) {
+    const request = parseMcpMessage(line);
+    if (request?.method && Object.hasOwn(request, 'id')) requests.set(request.id, request);
     childWriteChain = childWriteChain
       .catch(() => {})
       .then(() => writeChildLine(child, line));
@@ -413,6 +420,7 @@ async function main() {
     if (!expected || activeChild !== child || !sameRpcId(response.id, expected.id)) return false;
     clearHandshakeTimer();
     handshake = null;
+    requests.delete(response.id);
     if (expected.kind === "external") process.stdout.write(`${responseLine}\n`);
     if (response.error) {
       protocolPhase = "awaiting-init";
@@ -493,11 +501,14 @@ async function main() {
   }
 
   async function handleChildLine(child, line) {
+    if (activeChild !== child) return;
     const message = parseMcpMessage(line);
     if (message && handshake && !Object.prototype.hasOwnProperty.call(message, "method")) {
       if (await completeHandshake(child, message, line)) return;
     }
-    process.stdout.write(`${line}\n`);
+    const request = requests.get(message?.id);
+    if (message && !message.method) requests.delete(message.id);
+    process.stdout.write(message ? `${JSON.stringify(addGuidance(message, request, guidance))}\n` : `${line}\n`);
   }
 
   function writeBlockedResponse(line) {
@@ -556,6 +567,11 @@ async function main() {
 
   async function setBlocked(reason, retryable = false) {
     blockedReason = reason;
+    for (const request of requests.values()) {
+      const response = blockedResponse(JSON.stringify(request), reason);
+      if (response) process.stdout.write(response);
+    }
+    requests.clear();
     blockedRetryable = retryable;
     blockedRetryAt = retryable ? Date.now() + retryDelay(retryAttempt) : 0;
     if (retryable) retryAttempt = Math.min(retryAttempt + 1, 4);
@@ -572,6 +588,13 @@ async function main() {
   }
 
   async function requestOuterRestart(latest) {
+    const reason = 'validated browser generation changed; retry in a fresh MCP session';
+    rejectPendingMessages(reason);
+    for (const request of requests.values()) {
+      const response = blockedResponse(JSON.stringify(request), reason);
+      if (response) process.stdout.write(response);
+    }
+    requests.clear();
     stopping = true;
     if (poll) {
       clearInterval(poll);
@@ -709,12 +732,16 @@ async function main() {
   try {
     for await (const line of input) {
       if (!line) continue;
-      if (blockedReason || !activeChild || activeChild.stdin.destroyed) {
+      if (blockedReason || transitioning || !activeChild || activeChild.stdin.destroyed) {
         writeBlockedResponse(line);
         continue;
       }
       const message = parseMcpMessage(line);
       const method = message?.method;
+      if (await missingVersionedClient(message)) {
+        if (Object.hasOwn(message, 'id')) process.stdout.write(`${JSON.stringify({jsonrpc: '2.0', id: message.id, result: {isError: true, content: [{type: 'text', text: `Removed versioned browser client path. ${guidance}`}]}})}\n`);
+        continue;
+      }
       const child = activeChild;
       if (method === "initialize") {
         if (protocolPhase === "awaiting-init" || protocolPhase === "ready") {

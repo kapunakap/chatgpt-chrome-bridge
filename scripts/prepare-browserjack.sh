@@ -334,6 +334,11 @@ if old not in types:
 types_path.write_text(types.replace(old, new, 1))
 
 launch = launch_path.read_text()
+old = '''  return `permissions.claude_browser_node_repl.filesystem={${entries.join(",")}}`;'''
+new = '''  return `permissions.claude_browser_node_repl={filesystem={${entries.join(",")}},network={enabled=true}}`;'''
+if old not in launch:
+    raise SystemExit("BrowserJack sandbox permission profile no longer matches the pinned upstream commit")
+launch = launch.replace(old, new, 1)
 old = '''      NODE_REPL_NODE_MODULE_DIRS: runtime.nodeModulesPath,
       NODE_REPL_NODE_PATH: runtime.nodePath,
       NODE_REPL_TRUSTED_CODE_PATHS: runtime.chromePluginPath,
@@ -389,6 +394,8 @@ addition = '''test("enables the trusted browser RPC service from the validated r
   });
   assert.equal(launch.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S, runtime.browserClientSha256);
   assert.equal(launch.env.BROWSER_USE_AVAILABLE_BACKENDS, "chrome");
+  const profile = launch.args[launch.args.indexOf("-c") + 1];
+  assert.match(profile, /permissions\\.claude_browser_node_repl=\\{.*network=\\{enabled=true\\}/);
   assert.ok(launch.env.NODE_REPL_TRUSTED_CODE_PATHS.includes(runtime.trustedCodePaths[0]));
 });
 

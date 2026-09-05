@@ -91,8 +91,13 @@ try {
 
   const sessionId = `bridge-smoke-${randomUUID()}`;
   const code = `
+    var smokeStage = 'import-client';
+    var smokeTab;
+    try {
     var smokeClient = await import(${JSON.stringify(browserClientUrl)});
+    smokeStage = 'setup-runtime';
     globalThis.agent = await smokeClient.setupBrowserRuntime();
+    smokeStage = 'list-browsers';
     var smokeBackends = await agent.browsers.list();
     if (!smokeBackends.some((backend) => backend.family === "chrome")) {
       await new Promise((resolveRetry) => setTimeout(resolveRetry, 2000));
@@ -104,6 +109,7 @@ try {
       type: backend.type,
     }));
     var smokeChrome;
+    smokeStage = 'get-chrome';
     try {
       smokeChrome = await agent.browsers.get("chrome");
     } catch (error) {
@@ -112,16 +118,25 @@ try {
         "; cause=" + String(error),
       );
     }
+    smokeStage = 'browser-documentation';
     await smokeChrome.documentation();
-    var smokeTab = await smokeChrome.tabs.new();
+    smokeStage = 'create-tab';
+    smokeTab = await smokeChrome.tabs.new();
+    smokeStage = 'navigate-example';
     await smokeTab.goto("https://example.com");
+    smokeStage = 'wait-dom';
     await smokeTab.playwright.waitForLoadState({ state: "domcontentloaded", timeoutMs: 10000 });
+    smokeStage = 'read-title';
     var smokeTitle = await smokeTab.title();
+    smokeStage = 'close-tab';
     await smokeTab.close();
+    smokeTab = undefined;
     nodeRepl.write(JSON.stringify({
       chromeAvailable: smokeBackends.some((backend) => backend.family === "chrome" || backend.type === "extension"),
       title: smokeTitle,
     }));
+    } catch (error) { throw new Error('smoke_stage=' + smokeStage + ': ' + String(error)); }
+    finally { if (smokeTab) { try { await smokeTab.close(); } catch { nodeRepl.write('smoke_cleanup_failed=true'); } } }
   `;
   const toolResponse = await request(3, "tools/call", {
     name: "js",

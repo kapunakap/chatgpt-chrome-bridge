@@ -10,6 +10,21 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const upstream = process.env.BROWSERJACK_DISCOVERY_UPSTREAM
   ?? resolve(repoRoot, "scripts/browserjack-current.sh");
 
+process.stdout.on("error", (error) => {
+  if (error?.code === "EPIPE") {
+    process.exitCode = 0;
+    return;
+  }
+  throw error;
+});
+
+process.on("uncaughtException", (error) => {
+  if (error?.code === "EPIPE") {
+    process.exit(0);
+  }
+  throw error;
+});
+
 function safeScalar(value) {
   if (value === null || typeof value === "number" || typeof value === "boolean") {
     return JSON.stringify(value);
