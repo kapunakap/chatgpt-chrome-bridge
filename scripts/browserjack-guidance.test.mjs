@@ -18,7 +18,7 @@ test('reset and tool listing carry stable guidance without changing schemas', ()
 
 test('removed versioned imports are rejected while present and unrelated imports pass', async () => {
   const request = code => ({method: 'tools/call', params: {name: 'js', arguments: {code}}});
-  const code = 'await import("file:///Users/test/.codex/plugins/cache/openai-bundled/chrome/26.901.20858/scripts/browser-client.mjs")';
+  const code = 'await import("file:///tmp/test/.codex/plugins/cache/openai-bundled/chrome/26.901.20858/scripts/browser-client.mjs")';
   assert.equal(await missingVersionedClient(request(code), async () => false), true);
   assert.equal(await missingVersionedClient(request(code), async () => true), false);
   assert.equal(await missingVersionedClient(request('await import("node:path")'), async () => false), false);

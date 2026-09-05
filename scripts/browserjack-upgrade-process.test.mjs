@@ -272,7 +272,7 @@ test("compatible generation replacement uses a fresh supervisor and BrowserJack 
     params: {
       name: "js",
       arguments: {
-        code: 'await import("file:///Users/test/.codex/plugins/cache/openai-bundled/chrome/26.901.20858/scripts/browser-client.mjs")',
+        code: 'await import("file:///tmp/test/.codex/plugins/cache/openai-bundled/chrome/26.901.20858/scripts/browser-client.mjs")',
       },
     },
   });
