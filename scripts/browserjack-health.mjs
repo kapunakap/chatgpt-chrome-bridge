@@ -35,6 +35,17 @@ export function classifyProbeFailure(value) {
   return isUserUnavailable(value) ? "user-unavailable" : "other";
 }
 
+export function readinessFromToolContent(content) {
+  const text = Array.isArray(content)
+    ? content.map((item) => typeof item?.text === "string" ? item.text : JSON.stringify(item)).join("\n")
+    : String(content ?? "");
+  return {
+    chromeDiscovered: text.includes('"chromeDiscovered":true'),
+    userBindingUsable: text.includes('"userBindingUsable":true'),
+    tabsApiUsable: text.includes('"tabsApiUsable":true'),
+  };
+}
+
 export function blankHealthState() {
   return {
     version: 1,
@@ -225,17 +236,13 @@ export async function probeBrowserJack({
       throw new Error(`BrowserJack readiness call failed: ${failure}`);
     }
 
-    const rendered = diagnosticText(JSON.stringify(toolResponse.result?.content ?? []));
-    if (!rendered.includes('"chromeDiscovered":true') ||
-        !rendered.includes('"userBindingUsable":true') ||
-        !rendered.includes('"tabsApiUsable":true')) {
-      throw new Error(`Unexpected BrowserJack readiness result: ${rendered}`);
+    const readiness = readinessFromToolContent(toolResponse.result?.content ?? []);
+    if (!readiness.chromeDiscovered || !readiness.userBindingUsable || !readiness.tabsApiUsable) {
+      throw new Error(`Unexpected BrowserJack readiness result: ${diagnosticText(JSON.stringify(toolResponse.result?.content ?? []))}`);
     }
     return {
       ok: true,
-      chromeDiscovered: true,
-      userBindingUsable: true,
-      tabsApiUsable: true,
+      ...readiness,
       browserClientUrl,
     };
   } catch (error) {
