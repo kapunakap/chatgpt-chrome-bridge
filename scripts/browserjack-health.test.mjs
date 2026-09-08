@@ -7,6 +7,7 @@ import {
   isUserUnavailable,
   nextHealthDecision,
   readinessFromToolContent,
+  restartLaunchAgentAndWait,
   runHealthCycle,
 } from "./browserjack-health.mjs";
 
@@ -25,6 +26,36 @@ test("readiness parses the text payload returned by the js MCP tool", () => {
     readinessFromToolContent([{ type: "text", text: '{"chromeDiscovered":true,"userBindingUsable":false,"tabsApiUsable":false}' }]),
     { chromeDiscovered: true, userBindingUsable: false, tabsApiUsable: false },
   );
+});
+
+test("restart path uses launchctl kickstart -k", () => {
+  assert.match(
+    restartLaunchAgentAndWait.toString(),
+    /runCommand\("launchctl",\s*\["kickstart", "-k", target\]/u,
+  );
+});
+
+test("unrelated failures do not trigger stale-identity recovery", async () => {
+  let restarts = 0;
+  const result = await runHealthCycle({
+    state: {
+      ...blankHealthState(),
+      consecutiveUserUnavailable: 1,
+    },
+    probe: async () => ({
+      ok: false,
+      failureKind: "other",
+      error: "Chrome backend is not connected",
+    }),
+    restart: async () => { restarts += 1; },
+    sleepFn: async () => {},
+    now: () => 5_000,
+  });
+
+  assert.equal(restarts, 0);
+  assert.equal(result.restarted, false);
+  assert.equal(result.state.consecutiveUserUnavailable, 0);
+  assert.equal(result.state.lastFailureKind, "other");
 });
 
 test("two consecutive stale identity failures trigger one bounded restart then recover", async () => {
