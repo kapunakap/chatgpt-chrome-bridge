@@ -6,6 +6,7 @@ import {
   classifyProbeFailure,
   isUserUnavailable,
   nextHealthDecision,
+  readinessFromToolContent,
   runHealthCycle,
 } from "./browserjack-health.mjs";
 
@@ -13,6 +14,17 @@ test("User unavailable is classified separately from discovery failures", () => 
   assert.equal(isUserUnavailable("Error: User unavailable"), true);
   assert.equal(classifyProbeFailure("health_stage=user-binding: Error: User unavailable"), "user-unavailable");
   assert.equal(classifyProbeFailure("Chrome backend is not connected"), "other");
+});
+
+test("readiness parses the text payload returned by the js MCP tool", () => {
+  assert.deepEqual(
+    readinessFromToolContent([{ type: "text", text: '{"chromeDiscovered":true,"userBindingUsable":true,"tabsApiUsable":true}' }]),
+    { chromeDiscovered: true, userBindingUsable: true, tabsApiUsable: true },
+  );
+  assert.deepEqual(
+    readinessFromToolContent([{ type: "text", text: '{"chromeDiscovered":true,"userBindingUsable":false,"tabsApiUsable":false}' }]),
+    { chromeDiscovered: true, userBindingUsable: false, tabsApiUsable: false },
+  );
 });
 
 test("two consecutive stale identity failures trigger one bounded restart then recover", async () => {
