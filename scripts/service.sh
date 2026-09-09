@@ -20,7 +20,7 @@ GUI_DOMAIN="gui/$(id -u)"
 SERVICE_TARGET="$GUI_DOMAIN/$LABEL"
 HEALTH_TARGET="$GUI_DOMAIN/$HEALTH_LABEL"
 TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
-BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-discovery-compat.mjs}"
 HEALTH_PROBE="$REPO_ROOT/scripts/browserjack-health.mjs"
 HEALTH_SERVICE="$REPO_ROOT/scripts/health-service.sh"
 
@@ -111,9 +111,21 @@ try:
     value = json.loads(os.environ["STATUS_JSON"])
 except (KeyError, json.JSONDecodeError):
     raise SystemExit(1)
-ready = all(value.get(name) is True for name in ("process_running", "healthy", "ready"))
+ready = all(value.get(name) is True for name in ("healthy", "ready"))
 raise SystemExit(0 if ready else 1)
 PY
+}
+
+launchd_process_alive() {
+  local launch_output=''
+  local state=''
+  local pid=''
+
+  launch_output="$(launchctl print "$SERVICE_TARGET" 2>/dev/null)" || return 1
+  state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
+  pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
+  [[ "$state" == "running" && -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
 }
 
 browser_probe() {
@@ -133,13 +145,22 @@ wait_for_runtime_ready() {
   local last_probe='BrowserJack user-scoped readiness probe has not run yet.'
 
   for _ in {1..60}; do
-    if service_loaded && runtime_ready; then
+    if service_loaded && launchd_process_alive && runtime_ready; then
       set +e
       probe_json="$(browser_probe 2>&1)"
       probe_rc=$?
       set -e
       if [[ "$probe_rc" -eq 0 ]]; then
         printf 'launch_agent_loaded=true\n'
+        printf 'launch_agent_owns_process=true\n'
+        printf 'launch_agent_pid_alive=true\n'
+        printf 'runtime_process_owner=launchd\n'
+        if runtime_running; then
+          printf 'tunnel_managed_runtime_process_running=true\n'
+        else
+          printf 'tunnel_managed_runtime_process_running=false\n'
+        fi
+        printf 'tunnel_process_running=true\n'
         printf 'process_running=true\n'
         printf 'tunnel_healthy=true\n'
         printf 'tunnel_ready=true\n'
@@ -333,11 +354,13 @@ service_status() {
   local pid=''
   local umask_value=''
   local running=false
+  local pid_alive=false
   local tunnel_status=''
   local tunnel_status_rc=0
   local tunnel_process_running=false
   local tunnel_healthy=false
   local tunnel_ready=false
+  local effective_process_running=false
   local browser_ready=false
   local chrome_discovered=false
   local user_binding_ready=false
@@ -362,7 +385,10 @@ service_status() {
     state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
     pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
     umask_value="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*umask = //p' | head -n 1)"
-    [[ "$state" == "running" && -n "$pid" ]] && running=true
+    if [[ "$state" == "running" && -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      pid_alive=true
+      running=true
+    fi
     printf 'launch_agent_loaded=true\n'
   else
     printf 'launch_agent_loaded=false\n'
@@ -370,6 +396,7 @@ service_status() {
 
   printf 'launch_agent_state=%s\n' "$state"
   printf 'launch_agent_running=%s\n' "$running"
+  printf 'launch_agent_pid_alive=%s\n' "$pid_alive"
   [[ -n "$pid" ]] && printf 'launch_agent_pid=%s\n' "$pid"
   [[ -n "$umask_value" ]] && printf 'launch_agent_umask=%s\n' "$umask_value"
 
@@ -407,9 +434,20 @@ print("tunnel_runtime_state=" + str(value.get("runtime_state", "unknown")))
   else
     printf 'tunnel_runtime_state=unavailable\n'
   fi
+  if [[ "$running" == true || "$tunnel_process_running" == true ]]; then
+    effective_process_running=true
+  fi
   printf 'launch_agent_owns_process=%s\n' "$running"
-  printf 'tunnel_process_running=%s\n' "$tunnel_process_running"
-  printf 'tunnel_alive=%s\n' "$running"
+  if [[ "$running" == true ]]; then
+    printf 'runtime_process_owner=launchd\n'
+    printf 'tunnel_process_running=true\n'
+  else
+    printf 'runtime_process_owner=managed\n'
+    printf 'tunnel_process_running=%s\n' "$effective_process_running"
+  fi
+  printf 'tunnel_managed_runtime_process_running=%s\n' "$tunnel_process_running"
+  printf 'tunnel_alive=%s\n' "$effective_process_running"
+  printf 'process_running=%s\n' "$effective_process_running"
   printf 'tunnel_healthy=%s\n' "$tunnel_healthy"
   printf 'tunnel_ready=%s\n' "$tunnel_ready"
 

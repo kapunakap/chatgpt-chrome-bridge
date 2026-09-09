@@ -46,8 +46,7 @@ render_plist() {
     "$STDOUT_LOG" \
     "$STDERR_LOG" \
     "${TUNNEL_ALIAS:-local-chrome}" \
-    "$MAIN_LABEL" \
-    "${CHATGPT_APP_PATH:-/Applications/ChatGPT.app}" <<'PY'
+    "$MAIN_LABEL" <<'PY'
 import plistlib
 import sys
 
@@ -62,7 +61,6 @@ import sys
     stderr_log,
     alias,
     main_label,
-    app_path,
 ) = sys.argv[1:]
 
 value = {
@@ -80,7 +78,6 @@ value = {
         "PATH": service_path,
         "TUNNEL_ALIAS": alias,
         "LOCAL_CHROME_LAUNCH_AGENT_LABEL": main_label,
-        "CHATGPT_APP_PATH": app_path,
     },
     "StandardOutPath": stdout_log,
     "StandardErrorPath": stderr_log,

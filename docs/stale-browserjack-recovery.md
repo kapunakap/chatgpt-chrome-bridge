@@ -22,7 +22,7 @@ The bridge therefore reports Local Chrome ready only after the user-scoped probe
 - `com.kapunakap.chatgpt-chrome-bridge.local-chrome` owns `tunnel-client` and uses `RunAtLoad`, `KeepAlive`, and a bounded `ThrottleInterval`;
 - `com.kapunakap.chatgpt-chrome-bridge.local-chrome.health` runs a user-scoped BrowserJack readiness check at a bounded interval.
 
-The health watcher persists only non-secret recovery bookkeeping under `~/.config/chatgpt-browser-bridge/local-chrome-health.json` with mode `600`.
+The health watcher persists only non-secret recovery bookkeeping under `~/.config/chatgpt-browser-bridge/local-chrome-health.json` with mode `600`. It probes the BrowserJack child already owned by the discovery wrapper through `~/.config/chatgpt-browser-bridge/browserjack-live-health.sock`; it never starts a second BrowserJack process. The socket parent is mode `700`, the socket is mode `600`, and its only accepted request is the fixed `{"op":"probe"}` operation.
 
 Recovery policy:
 
@@ -30,7 +30,7 @@ Recovery policy:
 - ordinary failures mark the service unhealthy but do not restart it;
 - two consecutive `User unavailable` failures arm one recovery attempt;
 - recovery uses `launchctl kickstart -k` on the main Local Chrome LaunchAgent;
-- the watcher waits for a new launchd PID and reconciles tunnel `process_running + healthy + ready` bookkeeping;
+- the watcher waits for a new, alive launchd PID and reconciles tunnel `healthy + ready` bookkeeping; launchd ownership does not depend on tunnel-client's separate managed-runtime `process_running` field;
 - it then re-probes with bounded backoff;
 - readiness is restored only after user binding and `tabs.list()` pass;
 - a failed recovery remains unhealthy and cannot restart-loop until a later healthy probe resets the state;
@@ -52,6 +52,9 @@ node scripts/browserjack-health.mjs state
 A fully ready persistent service reports all of the following as true:
 
 ```text
+runtime_process_owner=launchd
+launch_agent_pid_alive=true
+tunnel_managed_runtime_process_running=false
 process_running=true
 healthy=true
 ready=true
@@ -63,6 +66,8 @@ health_watch_ready=true
 ```
 
 `doctor --live` remains useful for runtime/signature/backend compatibility, but it is not the final readiness gate for this incident class.
+
+For a manually managed runtime, `runtime_process_owner=managed` and tunnel-client's own `process_running=true` remains required.
 
 ## Manual acceptance smoke
 

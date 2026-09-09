@@ -48,6 +48,8 @@ Any unknown hash or identity mismatch must fail closed until the signed candidat
 
 `tunnel-client` uses outbound HTTPS to OpenAI; this repository does not require a public inbound listener, reverse proxy, or firewall hole. The MCP server itself is launched locally by the managed tunnel runtime over stdio.
 
+The running discovery wrapper exposes one current-user Unix socket for its fixed BrowserJack readiness probe. Its parent directory is mode `700`, the socket is mode `600`, stale sockets are removed only after confirming they are current-user Unix sockets with no live listener, and the socket is removed on shutdown. It accepts only `{"op":"probe"}` and does not accept caller-supplied JavaScript, MCP requests, browser content, URLs, or credentials. Probe responses are reduced to readiness booleans and a bounded failure class.
+
 ## Vulnerability reports
 
 Prefer GitHub's private vulnerability reporting / Security Advisory flow for this repository. Do not include live credentials, cookies, browser profiles, or other secrets in a public issue.

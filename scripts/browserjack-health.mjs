@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const defaultLauncher = process.env.BROWSERJACK_COMMAND ?? resolve(repoRoot, "scripts/browserjack-current.sh");
-const defaultApp = process.env.CHATGPT_APP_PATH ?? "/Applications/ChatGPT.app";
+const defaultHealthSocket = process.env.BROWSERJACK_HEALTH_SOCKET ?? join(
+  homedir(),
+  ".config/chatgpt-browser-bridge/browserjack-live-health.sock",
+);
 const defaultStateFile = process.env.LOCAL_CHROME_HEALTH_STATE_FILE ?? join(
   homedir(),
   ".config/chatgpt-browser-bridge/local-chrome-health.json",
@@ -107,160 +108,63 @@ export function nextHealthDecision(previous, probe, now = Date.now(), {
   };
 }
 
-function killGroup(child, signal) {
-  if (!child?.pid) return;
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    // The process may already have exited.
-  }
-}
-
 export async function probeBrowserJack({
-  launcher = defaultLauncher,
-  appPath = defaultApp,
+  socketPath = defaultHealthSocket,
   timeout = timeoutMs,
 } = {}) {
-  const browserClientUrl = pathToFileURL(join(
-    appPath,
-    "Contents/Resources/plugins/openai-bundled/plugins/chrome/scripts/browser-client.mjs",
-  )).href;
-  const child = spawn(launcher, ["run"], {
-    cwd: repoRoot,
-    detached: true,
-    env: process.env,
-    shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
-    stderr = `${stderr}${chunk}`.slice(-maxDiagnosticBytes);
-  });
-
-  const pending = new Map();
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  lines.on("line", (line) => {
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      return;
-    }
-    const waiter = pending.get(message.id);
-    if (!waiter) return;
-    pending.delete(message.id);
-    waiter.resolve(message);
-  });
-
-  const rejectPending = (error) => {
-    for (const waiter of pending.values()) waiter.reject(error);
-    pending.clear();
-  };
-  const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
-  const request = (id, method, params) => new Promise((resolveRequest, rejectRequest) => {
-    pending.set(id, { resolve: resolveRequest, reject: rejectRequest });
-    send({ jsonrpc: "2.0", id, method, params });
-  });
-
-  child.once("error", (error) => rejectPending(new Error(`BrowserJack process failed to start: ${error.message}`)));
-  child.once("exit", (code, signal) => {
-    if (pending.size === 0) return;
-    rejectPending(new Error(`BrowserJack exited during readiness probe (${signal ?? `code ${code ?? 1}`})`));
-  });
-
-  const timer = setTimeout(() => {
-    rejectPending(new Error("BrowserJack readiness probe timed out"));
-    killGroup(child, "SIGKILL");
-  }, timeout);
-
   try {
-    const initialized = await request(1, "initialize", {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "chatgpt-chrome-bridge-health", version: "1" },
+    const response = await new Promise((resolveProbe, rejectProbe) => {
+      const socket = createConnection(socketPath);
+      let body = "";
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        callback(value);
+      };
+      socket.setEncoding("utf8");
+      socket.setTimeout(timeout, () => finish(rejectProbe, new Error("BrowserJack health socket timed out")));
+      socket.once("connect", () => socket.end('{"op":"probe"}\n'));
+      socket.on("data", (chunk) => {
+        body = `${body}${chunk}`;
+        if (body.length > 4_096) {
+          finish(rejectProbe, new Error("BrowserJack health socket response was too large"));
+        }
+      });
+      socket.once("error", (error) => finish(rejectProbe, error));
+      socket.once("end", () => finish(resolveProbe, body));
     });
-    if (initialized.error) throw new Error(`MCP initialize failed: ${initialized.error.message}`);
-    send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
-
-    const toolsResponse = await request(2, "tools/list", {});
-    const tools = toolsResponse.result?.tools ?? [];
-    if (!tools.some((tool) => tool.name === "js")) throw new Error("BrowserJack did not expose the js tool");
-
-    const sessionId = `bridge-health-${randomUUID()}`;
-    const code = `
-      var healthStage = 'import-client';
-      try {
-        var healthClient = await import(${JSON.stringify(browserClientUrl)});
-        healthStage = 'setup-runtime';
-        globalThis.agent = await healthClient.setupBrowserRuntime();
-        healthStage = 'discovery';
-        var healthBackends = await agent.browsers.list();
-        var healthChromeSummary = healthBackends.find((backend) => backend.family === 'chrome');
-        if (!healthChromeSummary) throw new Error('Chrome backend is not connected');
-        var healthChrome = await agent.browsers.get('chrome');
-        healthStage = 'user-binding';
-        if (typeof healthChrome.nameSession !== 'function') throw new Error('Chrome backend does not expose nameSession()');
-        await healthChrome.nameSession('chatgpt-chrome-bridge-health');
-        healthStage = 'tabs-list';
-        if (typeof healthChrome.tabs?.list !== 'function') throw new Error('Chrome backend does not expose tabs.list()');
-        var healthTabs = await healthChrome.tabs.list();
-        nodeRepl.write(JSON.stringify({
-          chromeDiscovered: true,
-          userBindingUsable: true,
-          tabsApiUsable: true,
-          tabCount: healthTabs.length,
-          browserClientUrl: ${JSON.stringify(browserClientUrl)},
-        }));
-      } catch (error) {
-        throw new Error('health_stage=' + healthStage + ': ' + String(error));
-      }
-    `;
-    const toolResponse = await request(3, "tools/call", {
-      name: "js",
-      arguments: { code, title: "Check Local Chrome readiness" },
-      _meta: {
-        "x-codex-turn-metadata": {
-          installation_id: sessionId,
-          session_id: sessionId,
-          thread_id: sessionId,
-          turn_id: "turn-1",
-          request_kind: "agent",
-          turn_started_at_unix_ms: Date.now(),
-        },
-      },
-    });
-    if (toolResponse.error || toolResponse.result?.isError === true) {
-      const failure = diagnosticText(JSON.stringify(toolResponse.error ?? toolResponse.result ?? {}));
-      throw new Error(`BrowserJack readiness call failed: ${failure}`);
+    const value = JSON.parse(response);
+    if (value?.ok !== true) {
+      return {
+        ok: false,
+        chromeDiscovered: value?.chromeDiscovered === true,
+        userBindingUsable: value?.userBindingUsable === true,
+        tabsApiUsable: value?.tabsApiUsable === true,
+        failureKind: value?.failureKind === "user-unavailable" ? "user-unavailable" : "other",
+        error: value?.failureKind === "user-unavailable" ? "User unavailable" : "BrowserJack readiness probe failed",
+      };
     }
-
-    const readiness = readinessFromToolContent(toolResponse.result?.content ?? []);
-    if (!readiness.chromeDiscovered || !readiness.userBindingUsable || !readiness.tabsApiUsable) {
-      throw new Error(`Unexpected BrowserJack readiness result: ${diagnosticText(JSON.stringify(toolResponse.result?.content ?? []))}`);
-    }
-    return {
-      ok: true,
-      ...readiness,
-      browserClientUrl,
+    const readiness = {
+      chromeDiscovered: value.chromeDiscovered === true,
+      userBindingUsable: value.userBindingUsable === true,
+      tabsApiUsable: value.tabsApiUsable === true,
     };
+    if (!readiness.chromeDiscovered || !readiness.userBindingUsable || !readiness.tabsApiUsable) {
+      throw new Error("BrowserJack health socket returned incomplete readiness");
+    }
+    return { ok: true, ...readiness };
   } catch (error) {
-    const detail = diagnosticText(`${error instanceof Error ? error.message : String(error)}${stderr ? `\n${stderr}` : ""}`);
+    const detail = diagnosticText(error instanceof Error ? error.message : String(error));
     return {
       ok: false,
-      chromeDiscovered: !/health_stage=(?:import-client|setup-runtime|discovery)/u.test(detail),
+      chromeDiscovered: false,
       userBindingUsable: false,
       tabsApiUsable: false,
       failureKind: classifyProbeFailure(detail),
-      error: detail,
-      browserClientUrl,
+      error: isUserUnavailable(detail) ? "User unavailable" : "BrowserJack health socket unavailable",
     };
-  } finally {
-    clearTimeout(timer);
-    child.stdin.end();
-    lines.close();
-    killGroup(child, "SIGTERM");
   }
 }
 
@@ -299,6 +203,29 @@ function parseLaunchdPid(value) {
   return value.match(/^[\t ]*pid = (\d+)$/mu)?.[1] ?? null;
 }
 
+function parseLaunchdState(value) {
+  return value.match(/^[\t ]*state = ([^\n]+)$/mu)?.[1]?.trim() ?? null;
+}
+
+function pidIsAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function tunnelRuntimeReady(value, {
+  owner = "managed",
+  launchdPidAlive = false,
+} = {}) {
+  if (value?.healthy !== true || value?.ready !== true) return false;
+  if (owner === "launchd") return launchdPidAlive === true;
+  return owner === "managed" && value?.process_running === true;
+}
+
 async function sleep(ms) {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
@@ -307,39 +234,57 @@ export async function restartLaunchAgentAndWait({
   label = defaultLabel,
   alias = defaultAlias,
   timeout = 30_000,
+  runCommandFn = runCommand,
+  isPidAlive = pidIsAlive,
+  now = Date.now,
+  sleepFn = sleep,
 } = {}) {
   const target = `gui/${process.getuid()}/${label}`;
-  const before = await runCommand("launchctl", ["print", target], { timeout: 5_000 });
+  const before = await runCommandFn("launchctl", ["print", target], { timeout: 5_000 });
   const beforePid = before.code === 0 ? parseLaunchdPid(before.stdout) : null;
-  const kicked = await runCommand("launchctl", ["kickstart", "-k", target], { timeout: 10_000 });
+  const kicked = await runCommandFn("launchctl", ["kickstart", "-k", target], { timeout: 10_000 });
   if (kicked.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${diagnosticText(kicked.stderr || kicked.stdout)}`);
   }
 
-  const deadline = Date.now() + timeout;
+  const deadline = now() + timeout;
   let lastDetail = "waiting for launchd and tunnel runtime";
-  while (Date.now() < deadline) {
-    const printed = await runCommand("launchctl", ["print", target], { timeout: 5_000 });
+  while (now() < deadline) {
+    const printed = await runCommandFn("launchctl", ["print", target], { timeout: 5_000 });
     const afterPid = printed.code === 0 ? parseLaunchdPid(printed.stdout) : null;
-    const launchdReady = printed.code === 0 && afterPid && (!beforePid || afterPid !== beforePid);
-    const status = await runCommand(resolve(repoRoot, "scripts/tunnel-client-current.sh"), [
+    const launchdPidAlive = printed.code === 0
+      && parseLaunchdState(printed.stdout) === "running"
+      && afterPid !== null
+      && afterPid !== beforePid
+      && isPidAlive(afterPid);
+    const status = await runCommandFn(resolve(repoRoot, "scripts/tunnel-client-current.sh"), [
       "runtimes", "--json", "status", alias,
     ], { timeout: 5_000 });
     let tunnelReady = false;
+    let tunnelStatus = null;
     if (status.code === 0) {
       try {
-        const value = JSON.parse(status.stdout);
-        tunnelReady = value.process_running === true && value.healthy === true && value.ready === true;
+        tunnelStatus = JSON.parse(status.stdout);
+        tunnelReady = tunnelRuntimeReady(tunnelStatus, { owner: "launchd", launchdPidAlive });
       } catch {
         lastDetail = "tunnel status returned invalid JSON";
       }
     } else {
       lastDetail = diagnosticText(status.stderr || status.stdout || lastDetail);
     }
-    if (launchdReady && tunnelReady) {
-      return { beforePid, afterPid, tunnelReady: true };
+    if (launchdPidAlive && tunnelReady) {
+      return {
+        owner: "launchd",
+        beforePid,
+        afterPid,
+        launchdPidAlive: true,
+        managedProcessRunning: tunnelStatus?.process_running === true,
+        tunnelHealthy: true,
+        tunnelReady: true,
+      };
     }
-    await sleep(1_000);
+    lastDetail = `launchd_pid_new_alive=${Boolean(launchdPidAlive)} tunnel_healthy=${tunnelStatus?.healthy === true} tunnel_ready=${tunnelStatus?.ready === true}`;
+    await sleepFn(1_000);
   }
   throw new Error(`LaunchAgent restart did not reconcile runtime readiness: ${lastDetail}`);
 }

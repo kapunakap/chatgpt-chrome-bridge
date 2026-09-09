@@ -1,15 +1,23 @@
 import assert from "node:assert/strict";
+import { mkdir, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   blankHealthState,
   classifyProbeFailure,
   isUserUnavailable,
   nextHealthDecision,
+  probeBrowserJack,
   readinessFromToolContent,
   restartLaunchAgentAndWait,
   runHealthCycle,
+  tunnelRuntimeReady,
 } from "./browserjack-health.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("User unavailable is classified separately from discovery failures", () => {
   assert.equal(isUserUnavailable("Error: User unavailable"), true);
@@ -28,11 +36,112 @@ test("readiness parses the text payload returned by the js MCP tool", () => {
   );
 });
 
-test("restart path uses launchctl kickstart -k", () => {
-  assert.match(
-    restartLaunchAgentAndWait.toString(),
-    /runCommand\("launchctl",\s*\["kickstart", "-k", target\]/u,
+test("launchd ownership ignores managed process_running while manual ownership requires it", () => {
+  const detached = { process_running: false, healthy: true, ready: true };
+  assert.equal(tunnelRuntimeReady(detached, { owner: "launchd", launchdPidAlive: true }), true);
+  assert.equal(tunnelRuntimeReady(detached, { owner: "launchd", launchdPidAlive: false }), false);
+  assert.equal(tunnelRuntimeReady(detached, { owner: "managed" }), false);
+  assert.equal(tunnelRuntimeReady({ ...detached, process_running: true }, { owner: "managed" }), true);
+});
+
+test("restart uses exact kickstart -k and accepts a new alive launchd PID with healthy ready tunnel", async () => {
+  const calls = [];
+  const runCommandFn = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "launchctl" && args[0] === "print") {
+      const pid = calls.filter(([name, values]) => name === "launchctl" && values[0] === "print").length === 1
+        ? "111"
+        : "222";
+      return { code: 0, stdout: `state = running\npid = ${pid}\n`, stderr: "" };
+    }
+    if (command === "launchctl") return { code: 0, stdout: "", stderr: "" };
+    return {
+      code: 0,
+      stdout: JSON.stringify({ process_running: false, healthy: true, ready: true }),
+      stderr: "",
+    };
+  };
+  const result = await restartLaunchAgentAndWait({
+    label: "test.local-chrome",
+    alias: "local-chrome",
+    runCommandFn,
+    isPidAlive: (pid) => pid === "222",
+    now: () => 0,
+    sleepFn: async () => {},
+  });
+  assert.deepEqual(calls[1], [
+    "launchctl",
+    ["kickstart", "-k", `gui/${process.getuid()}/test.local-chrome`],
+  ]);
+  assert.equal(result.owner, "launchd");
+  assert.equal(result.beforePid, "111");
+  assert.equal(result.afterPid, "222");
+  assert.equal(result.launchdPidAlive, true);
+  assert.equal(result.managedProcessRunning, false);
+  assert.equal(result.tunnelHealthy, true);
+  assert.equal(result.tunnelReady, true);
+});
+
+test("restart rejects healthy tunnel bookkeeping until launchd has a new PID", async () => {
+  let clock = 0;
+  const runCommandFn = async (command, args) => {
+    if (command === "launchctl" && args[0] === "print") {
+      return { code: 0, stdout: "state = running\npid = 111\n", stderr: "" };
+    }
+    if (command === "launchctl") return { code: 0, stdout: "", stderr: "" };
+    return {
+      code: 0,
+      stdout: JSON.stringify({ process_running: false, healthy: true, ready: true }),
+      stderr: "",
+    };
+  };
+  await assert.rejects(
+    restartLaunchAgentAndWait({
+      runCommandFn,
+      isPidAlive: () => true,
+      timeout: 1_500,
+      now: () => clock,
+      sleepFn: async (ms) => { clock += ms; },
+    }),
+    /new_alive=false/u,
   );
+});
+
+test("health probe uses the private socket and treats an absent socket as unhealthy", async (t) => {
+  const directory = join(repoRoot, ".git", `health-test-${process.pid}`);
+  await mkdir(directory, { mode: 0o700 });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const socketPath = join(directory, "health.sock");
+  let request = "";
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { request += chunk; });
+    socket.once("end", () => socket.end(`${JSON.stringify({
+      ok: true,
+      chromeDiscovered: true,
+      userBindingUsable: true,
+      tabsApiUsable: true,
+    })}\n`));
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(socketPath, resolveListen);
+  });
+  t.after(() => server.close());
+
+  const healthy = await probeBrowserJack({ socketPath, timeout: 1_000 });
+  assert.equal(request, '{"op":"probe"}\n');
+  assert.deepEqual(healthy, {
+    ok: true,
+    chromeDiscovered: true,
+    userBindingUsable: true,
+    tabsApiUsable: true,
+  });
+
+  const unavailable = await probeBrowserJack({ socketPath: join(directory, "absent.sock"), timeout: 100 });
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.failureKind, "other");
+  assert.equal(unavailable.error, "BrowserJack health socket unavailable");
 });
 
 test("unrelated failures do not trigger stale-identity recovery", async () => {

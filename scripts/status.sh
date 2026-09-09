@@ -3,7 +3,7 @@ set -euo pipefail
 
 ALIAS="${TUNNEL_ALIAS:-local-chrome}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-discovery-compat.mjs}"
 HEALTH_PROBE="$REPO_ROOT/scripts/browserjack-health.mjs"
 TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
 SERVICE_LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
@@ -44,9 +44,11 @@ if [[ -f "$SERVICE_PLIST" ]]; then
   launch_pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
   launch_umask="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*umask = //p' | head -n 1)"
   [[ "$launch_state" == "running" && -n "$launch_pid" ]] || fail "LaunchAgent is loaded but not running."
+  kill -0 "$launch_pid" 2>/dev/null || fail "LaunchAgent PID is not alive."
   launch_agent_running=true
   printf 'launch_agent_loaded=true\n'
   printf 'launch_agent_running=true\n'
+  printf 'launch_agent_pid_alive=true\n'
   printf 'launch_agent_pid=%s\n' "$launch_pid"
   [[ -n "$launch_umask" ]] && printf 'launch_agent_umask=%s\n' "$launch_umask"
 
@@ -67,6 +69,7 @@ else
   printf 'launch_agent_installed=false\n'
   printf 'launch_agent_loaded=false\n'
   printf 'launch_agent_running=false\n'
+  printf 'launch_agent_pid_alive=false\n'
   printf 'health_watch_installed=false\n'
   printf 'health_watch_loaded=false\n'
   printf 'WARNING: Local Chrome is not persistent. Run: bash scripts/service.sh install\n'
@@ -130,14 +133,17 @@ BROWSER_READY="$browser_ready" \
 HEALTH_WATCH_READY="$health_watch_ready" node <<'NODE'
 const s = JSON.parse(process.env.STATUS_JSON);
 const launchAgentOwnsProcess = process.env.LAUNCH_AGENT_RUNNING === "true";
+const processRunning = launchAgentOwnsProcess || s.process_running === true;
 const checks = {
-  process_running: s.process_running === true || launchAgentOwnsProcess,
+  process_running: processRunning,
   healthy: s.healthy === true,
   ready: s.ready === true,
   browser_ready: process.env.BROWSER_READY === "true",
   health_watch_ready: process.env.HEALTH_WATCH_READY === "true",
 };
-console.log(`tunnel_process_running=${s.process_running === true ? 'true' : 'false'}`);
+console.log(`runtime_process_owner=${launchAgentOwnsProcess ? 'launchd' : 'managed'}`);
+console.log(`tunnel_managed_runtime_process_running=${s.process_running === true ? 'true' : 'false'}`);
+console.log(`tunnel_process_running=${processRunning ? 'true' : 'false'}`);
 console.log(`launch_agent_owns_process=${launchAgentOwnsProcess ? 'true' : 'false'}`);
 for (const [name, ok] of Object.entries(checks)) {
   console.log(`${name}=${ok ? 'true' : 'false'}`);
