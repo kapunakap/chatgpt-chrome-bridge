@@ -5,19 +5,24 @@ ACTION="${1:-status}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ALIAS="${TUNNEL_ALIAS:-local-chrome}"
 LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
+HEALTH_LABEL="${LOCAL_CHROME_HEALTH_LAUNCH_AGENT_LABEL:-$LABEL.health}"
 PROFILE_DIR="${TUNNEL_CLIENT_PROFILE_DIR:-$HOME/.config/tunnel-client}"
 PROFILE_PATH="$PROFILE_DIR/$ALIAS.yaml"
 RUNTIME_API_KEY_FILE="${CONTROL_PLANE_RUNTIME_API_KEY_FILE:-$HOME/.config/chatgpt-browser-bridge/runtime-api-key}"
 LAUNCH_AGENT_DIR="${LOCAL_CHROME_LAUNCH_AGENT_DIR:-$HOME/Library/LaunchAgents}"
 PLIST_PATH="${LOCAL_CHROME_LAUNCH_AGENT_PLIST:-$LAUNCH_AGENT_DIR/$LABEL.plist}"
+HEALTH_PLIST_PATH="${LOCAL_CHROME_HEALTH_LAUNCH_AGENT_PLIST:-$LAUNCH_AGENT_DIR/$HEALTH_LABEL.plist}"
 LOG_DIR="${LOCAL_CHROME_LAUNCH_AGENT_LOG_DIR:-$HOME/Library/Application Support/chatgpt-browser-bridge/launchd}"
 STDOUT_LOG="$LOG_DIR/local-chrome.stdout.log"
 STDERR_LOG="$LOG_DIR/local-chrome.stderr.log"
 SERVICE_PATH="${LOCAL_CHROME_SERVICE_PATH:-$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 GUI_DOMAIN="gui/$(id -u)"
 SERVICE_TARGET="$GUI_DOMAIN/$LABEL"
+HEALTH_TARGET="$GUI_DOMAIN/$HEALTH_LABEL"
 TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
-BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-discovery-compat.mjs}"
+HEALTH_PROBE="$REPO_ROOT/scripts/browserjack-health.mjs"
+HEALTH_SERVICE="$REPO_ROOT/scripts/health-service.sh"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -25,12 +30,13 @@ fail() {
 }
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 Usage: bash scripts/service.sh <install|start|stop|restart|status|uninstall>
 
-Manages the user-level launchd service that owns the Local Chrome tunnel.
-The tunnel profile and runtime API key remain outside this repository.
-EOF
+Manages the user-level launchd service that owns the Local Chrome tunnel plus
+its bounded BrowserJack user/session health watcher. The tunnel profile and
+runtime API key remain outside this repository.
+USAGE
 }
 
 require_macos() {
@@ -55,18 +61,26 @@ validate_inputs() {
   require_command launchctl
   require_command plutil
   require_command python3
+  require_command node
   require_command tunnel-client
   [[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
   [[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
+  [[ -f "$HEALTH_PROBE" ]] || fail "BrowserJack health probe is missing: $HEALTH_PROBE"
+  [[ -f "$HEALTH_SERVICE" ]] || fail "Local Chrome health watcher manager is missing: $HEALTH_SERVICE"
   "$TUNNEL_CLIENT_SHIM" --version >/dev/null
   [[ "$ALIAS" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid tunnel alias: $ALIAS"
   [[ "$LABEL" =~ ^[A-Za-z0-9.-]+$ ]] || fail "Invalid launch-agent label: $LABEL"
+  [[ "$HEALTH_LABEL" =~ ^[A-Za-z0-9.-]+$ ]] || fail "Invalid health launch-agent label: $HEALTH_LABEL"
   validate_private_file "$PROFILE_PATH" "Tunnel profile"
   validate_private_file "$RUNTIME_API_KEY_FILE" "Runtime API key file"
 }
 
 service_loaded() {
   launchctl print "$SERVICE_TARGET" >/dev/null 2>&1
+}
+
+health_service_loaded() {
+  launchctl print "$HEALTH_TARGET" >/dev/null 2>&1
 }
 
 runtime_running() {
@@ -102,6 +116,22 @@ raise SystemExit(0 if ready else 1)
 PY
 }
 
+launchd_process_alive() {
+  local launch_output=''
+  local state=''
+  local pid=''
+
+  launch_output="$(launchctl print "$SERVICE_TARGET" 2>/dev/null)" || return 1
+  state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
+  pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
+  [[ "$state" == "running" && -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+browser_probe() {
+  node "$HEALTH_PROBE" probe
+}
+
 wait_for_runtime_stop() {
   for _ in {1..20}; do
     runtime_running || return 0
@@ -111,24 +141,47 @@ wait_for_runtime_stop() {
 }
 
 wait_for_runtime_ready() {
-  for _ in {1..30}; do
-    if service_loaded && runtime_ready; then
-      printf 'launch_agent_loaded=true\n'
-      printf 'process_running=true\n'
-      printf 'healthy=true\n'
-      printf 'browser_probe_pending=true\n'
-      if ! "$BROWSERJACK_SHIM" doctor --live --json >/dev/null 2>&1; then
-        printf 'browser_ready=false\n'
-        fail "BrowserJack live doctor failed; the tunnel is alive but Local Chrome is not ready."
+  local probe_json=''
+  local last_probe='BrowserJack user-scoped readiness probe has not run yet.'
+
+  for _ in {1..60}; do
+    if service_loaded && launchd_process_alive && runtime_ready; then
+      set +e
+      probe_json="$(browser_probe 2>&1)"
+      probe_rc=$?
+      set -e
+      if [[ "$probe_rc" -eq 0 ]]; then
+        printf 'launch_agent_loaded=true\n'
+        printf 'launch_agent_owns_process=true\n'
+        printf 'launch_agent_pid_alive=true\n'
+        printf 'runtime_process_owner=launchd\n'
+        if runtime_running; then
+          printf 'tunnel_managed_runtime_process_running=true\n'
+        else
+          printf 'tunnel_managed_runtime_process_running=false\n'
+        fi
+        printf 'tunnel_process_running=true\n'
+        printf 'process_running=true\n'
+        printf 'tunnel_healthy=true\n'
+        printf 'tunnel_ready=true\n'
+        PROBE_JSON="$probe_json" python3 - <<'PY'
+import json
+import os
+
+value = json.loads(os.environ["PROBE_JSON"])
+print(f"chrome_discovered={str(value.get('chromeDiscovered') is True).lower()}")
+print(f"user_binding_ready={str(value.get('userBindingUsable') is True).lower()}")
+print(f"tabs_api_ready={str(value.get('tabsApiUsable') is True).lower()}")
+print("browser_ready=true")
+print("ready=true")
+PY
+        return 0
       fi
-      printf 'browser_probe_passed=true\n'
-      printf 'browser_ready=true\n'
-      printf 'ready=true\n'
-      return 0
+      last_probe="$probe_json"
     fi
     sleep 1
   done
-  fail "LaunchAgent did not reach running + healthy + ready within 30 seconds."
+  fail "LaunchAgent/tunnel became available but BrowserJack user/session readiness did not pass: ${last_probe:0:1000}"
 }
 
 stop_runtime_if_running() {
@@ -180,7 +233,7 @@ value = {
     "RunAtLoad": True,
     "KeepAlive": True,
     "ProcessType": "Background",
-    "ThrottleInterval": 10,
+    "ThrottleInterval": 30,
     "Umask": 0o077,
     "WorkingDirectory": "/",
     "EnvironmentVariables": {
@@ -229,6 +282,7 @@ install_service() {
   render_plist "$rendered_plist" "$tunnel_client_bin"
   plutil -lint "$rendered_plist" >/dev/null
 
+  bash "$HEALTH_SERVICE" stop >/dev/null 2>&1 || true
   if service_loaded; then
     launchctl bootout "$SERVICE_TARGET"
     wait_for_runtime_stop
@@ -237,24 +291,25 @@ install_service() {
 
   install -m 600 "$rendered_plist" "$PLIST_PATH"
   bootstrap_service
+  bash "$HEALTH_SERVICE" install
   wait_for_runtime_ready
   rm -f "$rendered_plist"
   rmdir "$service_tmp_dir"
   trap - EXIT
   printf 'SERVICE_INSTALLED=1\n'
+  printf 'HEALTH_WATCH_INSTALLED=1\n'
   printf 'SERVICE_READY=1\n'
 }
 
 start_service() {
   validate_inputs
   [[ -f "$PLIST_PATH" ]] || fail "LaunchAgent is not installed. Run: bash scripts/service.sh install"
-  if service_loaded; then
-    wait_for_runtime_ready
-    printf 'SERVICE_STARTED=1\n'
-    return
+  [[ -f "$HEALTH_PLIST_PATH" ]] || fail "Health watcher is not installed. Run: bash scripts/service.sh install"
+  if ! service_loaded; then
+    stop_runtime_if_running
+    bootstrap_service
   fi
-  stop_runtime_if_running
-  bootstrap_service
+  bash "$HEALTH_SERVICE" start
   wait_for_runtime_ready
   printf 'SERVICE_STARTED=1\n'
 }
@@ -264,12 +319,14 @@ stop_service() {
   require_command launchctl
   require_command tunnel-client
 
+  bash "$HEALTH_SERVICE" stop >/dev/null 2>&1 || true
   if service_loaded; then
     launchctl bootout "$SERVICE_TARGET"
     wait_for_runtime_stop
   else
     stop_runtime_if_running
   fi
+  printf 'health_watch_loaded=false\n'
   printf 'launch_agent_loaded=false\n'
   printf 'SERVICE_STOPPED=1\n'
 }
@@ -284,6 +341,9 @@ restart_service() {
     stop_runtime_if_running
     bootstrap_service
   fi
+  if [[ -f "$HEALTH_PLIST_PATH" ]]; then
+    bash "$HEALTH_SERVICE" start >/dev/null
+  fi
   wait_for_runtime_ready
   printf 'SERVICE_RESTARTED=1\n'
 }
@@ -294,17 +354,25 @@ service_status() {
   local pid=''
   local umask_value=''
   local running=false
+  local pid_alive=false
   local tunnel_status=''
   local tunnel_status_rc=0
   local tunnel_process_running=false
   local tunnel_healthy=false
   local tunnel_ready=false
+  local effective_process_running=false
   local browser_ready=false
+  local chrome_discovered=false
+  local user_binding_ready=false
+  local tabs_api_ready=false
+  local health_loaded=false
   local tunnel_fields=''
+  local probe_json=''
 
   require_macos
   require_command launchctl
   require_command tunnel-client
+  require_command node
   printf 'launch_agent_label=%s\n' "$LABEL"
   if [[ -f "$PLIST_PATH" ]]; then
     printf 'launch_agent_installed=true\n'
@@ -317,7 +385,10 @@ service_status() {
     state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
     pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
     umask_value="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*umask = //p' | head -n 1)"
-    [[ "$state" == "running" && -n "$pid" ]] && running=true
+    if [[ "$state" == "running" && -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      pid_alive=true
+      running=true
+    fi
     printf 'launch_agent_loaded=true\n'
   else
     printf 'launch_agent_loaded=false\n'
@@ -325,8 +396,19 @@ service_status() {
 
   printf 'launch_agent_state=%s\n' "$state"
   printf 'launch_agent_running=%s\n' "$running"
+  printf 'launch_agent_pid_alive=%s\n' "$pid_alive"
   [[ -n "$pid" ]] && printf 'launch_agent_pid=%s\n' "$pid"
   [[ -n "$umask_value" ]] && printf 'launch_agent_umask=%s\n' "$umask_value"
+
+  if [[ -f "$HEALTH_PLIST_PATH" ]]; then
+    printf 'health_watch_installed=true\n'
+  else
+    printf 'health_watch_installed=false\n'
+  fi
+  if health_service_loaded; then
+    health_loaded=true
+  fi
+  printf 'health_watch_loaded=%s\n' "$health_loaded"
 
   set +e
   tunnel_status="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>/dev/null)"
@@ -352,17 +434,53 @@ print("tunnel_runtime_state=" + str(value.get("runtime_state", "unknown")))
   else
     printf 'tunnel_runtime_state=unavailable\n'
   fi
+  if [[ "$running" == true || "$tunnel_process_running" == true ]]; then
+    effective_process_running=true
+  fi
   printf 'launch_agent_owns_process=%s\n' "$running"
-  printf 'tunnel_process_running=%s\n' "$tunnel_process_running"
-  printf 'tunnel_alive=%s\n' "$running"
+  if [[ "$running" == true ]]; then
+    printf 'runtime_process_owner=launchd\n'
+    printf 'tunnel_process_running=true\n'
+  else
+    printf 'runtime_process_owner=managed\n'
+    printf 'tunnel_process_running=%s\n' "$effective_process_running"
+  fi
+  printf 'tunnel_managed_runtime_process_running=%s\n' "$tunnel_process_running"
+  printf 'tunnel_alive=%s\n' "$effective_process_running"
+  printf 'process_running=%s\n' "$effective_process_running"
   printf 'tunnel_healthy=%s\n' "$tunnel_healthy"
   printf 'tunnel_ready=%s\n' "$tunnel_ready"
 
-  if [[ -x "$BROWSERJACK_SHIM" ]] && "$BROWSERJACK_SHIM" doctor --live --json >/dev/null 2>&1; then
-    browser_ready=true
+  set +e
+  probe_json="$(browser_probe 2>/dev/null)"
+  probe_rc=$?
+  set -e
+  if [[ "$probe_rc" -eq 0 ]]; then
+    probe_fields="$(PROBE_JSON="$probe_json" python3 -c '
+import json
+import os
+value = json.loads(os.environ["PROBE_JSON"])
+print("chrome_discovered=" + str(value.get("chromeDiscovered") is True).lower())
+print("user_binding_ready=" + str(value.get("userBindingUsable") is True).lower())
+print("tabs_api_ready=" + str(value.get("tabsApiUsable") is True).lower())
+')"
+    while IFS= read -r line; do
+      case "$line" in
+        chrome_discovered=true) chrome_discovered=true ;;
+        user_binding_ready=true) user_binding_ready=true ;;
+        tabs_api_ready=true) tabs_api_ready=true ;;
+      esac
+    done <<<"$probe_fields"
+    if [[ "$chrome_discovered" == true && "$user_binding_ready" == true && "$tabs_api_ready" == true ]]; then
+      browser_ready=true
+    fi
   fi
+  printf 'chrome_discovered=%s\n' "$chrome_discovered"
+  printf 'user_binding_ready=%s\n' "$user_binding_ready"
+  printf 'tabs_api_ready=%s\n' "$tabs_api_ready"
   printf 'browser_ready=%s\n' "$browser_ready"
-  if [[ "$running" == true && "$tunnel_healthy" == true && "$tunnel_ready" == true && "$browser_ready" == true ]]; then
+
+  if [[ "$running" == true && "$tunnel_healthy" == true && "$tunnel_ready" == true && "$browser_ready" == true && "$health_loaded" == true ]]; then
     printf 'service_ready=true\n'
     return 0
   fi
@@ -375,6 +493,7 @@ uninstall_service() {
   require_command launchctl
   require_command tunnel-client
 
+  bash "$HEALTH_SERVICE" uninstall >/dev/null 2>&1 || true
   if service_loaded; then
     launchctl bootout "$SERVICE_TARGET"
     wait_for_runtime_stop
@@ -384,31 +503,17 @@ uninstall_service() {
   rm -f "$PLIST_PATH"
   launchctl enable "$SERVICE_TARGET"
   printf 'SERVICE_UNINSTALLED=1\n'
-  printf 'Tunnel profile, runtime API key, and logs were preserved.\n'
+  printf 'Tunnel profile, runtime API key, health state, and logs were preserved.\n'
 }
 
 case "$ACTION" in
-  install)
-    install_service
-    ;;
-  start)
-    start_service
-    ;;
-  stop)
-    stop_service
-    ;;
-  restart)
-    restart_service
-    ;;
-  status)
-    service_status
-    ;;
-  uninstall)
-    uninstall_service
-    ;;
-  -h|--help|help)
-    usage
-    ;;
+  install) install_service ;;
+  start) start_service ;;
+  stop) stop_service ;;
+  restart) restart_service ;;
+  status) service_status ;;
+  uninstall) uninstall_service ;;
+  -h|--help|help) usage ;;
   *)
     usage >&2
     fail "Unknown service action: $ACTION"

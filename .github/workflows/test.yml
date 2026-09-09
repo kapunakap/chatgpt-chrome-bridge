@@ -28,6 +28,8 @@ jobs:
           node --check scripts/browserjack-runtime.test.mjs
           node --check scripts/browserjack-live-probe.mjs
           node --check scripts/browserjack-live-probe.test.mjs
+          node --check scripts/browserjack-health.mjs
+          node --check scripts/browserjack-health.test.mjs
           node --check scripts/browserjack-supervisor.mjs
           node --check scripts/browserjack-supervisor.test.mjs
           node --check scripts/browserjack-guidance.mjs
@@ -41,6 +43,7 @@ jobs:
           node --test scripts/browserjack-fingerprint.test.mjs
           node --test scripts/browserjack-runtime.test.mjs
           node --test scripts/browserjack-live-probe.test.mjs
+          node --test scripts/browserjack-health.test.mjs
           node --test scripts/browserjack-supervisor.test.mjs
           node --test scripts/browserjack-guidance.test.mjs
           node --test scripts/browserjack-upgrade-process.test.mjs

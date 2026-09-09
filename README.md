@@ -111,7 +111,7 @@ Optional overrides:
 
 - `TUNNEL_ALIAS` — default `local-chrome`
 - `CONTROL_PLANE_RUNTIME_API_KEY_FILE` — default `~/.config/chatgpt-browser-bridge/runtime-api-key`
-- `BROWSERJACK_COMMAND` — default `scripts/browserjack-current.sh`
+- `BROWSERJACK_COMMAND` — default `scripts/browserjack-discovery-compat.mjs`
 - `CHATGPT_APP_PATH` — default `/Applications/ChatGPT.app`
 - `BROWSERJACK_PATCHED_ROOT` — override the prepared BrowserJack runtime path
 
@@ -133,11 +133,11 @@ Do not run `connect-tunnel.sh` after persistence is installed. launchd must be t
 
 This is a per-user service. Local Chrome is unavailable while the Mac is powered off, logged out, asleep without network access, or unable to reach OpenAI over outbound HTTPS.
 
-### Hosted `server/discover` compatibility
+### Hosted `server/discover` and health compatibility
 
-[OpenAI tunnel-client issue #41](https://github.com/openai/tunnel-client/issues/41) tracks a hosted ChatGPT compatibility problem with legacy MCP servers. This repository includes an opt-in wrapper that immediately rejects `server/discover` with JSON-RPC `-32601` and forwards every other MCP message unchanged.
+[OpenAI tunnel-client issue #41](https://github.com/openai/tunnel-client/issues/41) tracks a hosted ChatGPT compatibility problem with legacy MCP servers. The default wrapper immediately rejects `server/discover` with JSON-RPC `-32601` and forwards every other ordinary MCP message unchanged. It also owns the one running BrowserJack child and exposes a current-user health socket at `~/.config/chatgpt-browser-bridge/browserjack-live-health.sock`. The socket directory is mode `700`, the socket is mode `600`, and the protocol accepts only the fixed `{"op":"probe"}` operation. It has no TCP listener and accepts no caller-supplied JavaScript, MCP payload, browser content, URL, or credential. Internal health calls deliberately omit turn metadata so BrowserJack supplies its stable stdio-child session metadata. The fixed health code reuses an existing `globalThis.agent`, does not rename an existing serving browser session, and creates an agent plus startup session name only when no usable serving agent exists.
 
-Use the wrapper for the hosted ChatGPT legacy-stdio compatibility path:
+The default connection command uses this wrapper. An explicit equivalent is:
 
 ```bash
 CONTROL_PLANE_TUNNEL_ID=tunnel_... \
@@ -145,7 +145,7 @@ BROWSERJACK_COMMAND="$PWD/scripts/browserjack-discovery-compat.mjs" \
 bash scripts/connect-tunnel.sh
 ```
 
-The direct BrowserJack launcher remains the default for local use. Hosted ChatGPT acceptance for build `26.825.51511` (`7377`) on August 30, 2026 used official tunnel-client `0.0.13`, the initialized-notification compatibility opt-in, the stable `8ee11377-compat-v1` adapter, this discovery wrapper, and Chat mode. ChatGPT completed the real Chrome tool call and returned `Example Domain` without a response-deadline or client-internal `502` event. The wrapper deliberately does not deduplicate initialization; an earlier accepted trace received two harmless hosted `initialize` requests before `notifications/initialized` and `tools/list`.
+Hosted ChatGPT acceptance for build `26.825.51511` (`7377`) on August 30, 2026 used official tunnel-client `0.0.13`, the initialized-notification compatibility opt-in, the stable `8ee11377-compat-v1` adapter, this discovery wrapper, and Chat mode. ChatGPT completed the real Chrome tool call and returned `Example Domain` without a response-deadline or client-internal `502` event. The wrapper deliberately does not deduplicate initialization; an earlier accepted trace received two harmless hosted `initialize` requests before `notifications/initialized` and `tools/list`.
 
 ## 4. Connect it in ChatGPT
 

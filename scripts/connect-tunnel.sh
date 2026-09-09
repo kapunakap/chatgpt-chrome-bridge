@@ -5,7 +5,8 @@ ALIAS="${TUNNEL_ALIAS:-local-chrome}"
 TUNNEL_ID="${CONTROL_PLANE_TUNNEL_ID:-}"
 RUNTIME_API_KEY_FILE="${CONTROL_PLANE_RUNTIME_API_KEY_FILE:-$HOME/.config/chatgpt-browser-bridge/runtime-api-key}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-current.sh}"
+BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-discovery-compat.mjs}"
+HEALTH_PROBE="$REPO_ROOT/scripts/browserjack-health.mjs"
 TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
 SERVICE_LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
 SERVICE_PLIST="${LOCAL_CHROME_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist}"
@@ -28,8 +29,9 @@ fi
 [[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
 "$TUNNEL_CLIENT_SHIM" --version >/dev/null
 [[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
+[[ -f "$HEALTH_PROBE" ]] || fail "BrowserJack health probe not found: $HEALTH_PROBE"
 
-printf '== Revalidating BrowserJack browser handshake ==\n'
+printf '== Revalidating BrowserJack compatibility ==\n'
 "$BROWSERJACK_SHIM" doctor --live --json
 
 # tunnel-client parses this as argv for a local stdio MCP command. Quoting keeps
@@ -50,25 +52,49 @@ set -e
 printf '%s\n' "$connect_output"
 [[ "$connect_rc" -eq 0 ]] || fail "tunnel-client runtimes connect failed (exit $connect_rc)."
 
-printf '\n== Waiting for running + healthy + ready ==\n'
+printf '\n== Waiting for process + tunnel + user binding + tabs API readiness ==\n'
 status_json=''
-for _ in {1..30}; do
+probe_json='BrowserJack user-scoped readiness probe has not run yet.'
+for _ in {1..45}; do
   set +e
   status_json="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>&1)"
   status_rc=$?
   set -e
 
+  tunnel_ready=false
   if [[ "$status_rc" -eq 0 ]] && STATUS_JSON="$status_json" node <<'NODE'
 const s = JSON.parse(process.env.STATUS_JSON);
 process.exit(s.process_running === true && s.healthy === true && s.ready === true ? 0 : 1);
 NODE
   then
-    printf '%s\n' "$status_json"
-    printf '\nTUNNEL_READY=1\n'
-    exit 0
+    tunnel_ready=true
+  fi
+
+  if [[ "$tunnel_ready" == true ]]; then
+    set +e
+    probe_json="$(node "$HEALTH_PROBE" probe 2>&1)"
+    probe_rc=$?
+    set -e
+    if [[ "$probe_rc" -eq 0 ]] && PROBE_JSON="$probe_json" node <<'NODE'
+const p = JSON.parse(process.env.PROBE_JSON);
+process.exit(
+  p.chromeDiscovered === true &&
+  p.userBindingUsable === true &&
+  p.tabsApiUsable === true ? 0 : 1
+);
+NODE
+    then
+      printf '%s\n' "$status_json"
+      printf '%s\n' "$probe_json"
+      printf '\nTUNNEL_READY=1\n'
+      printf 'BRIDGE_LOCAL_READY=1\n'
+      printf 'browser_operation_verified=user_binding+tabs_list\n'
+      exit 0
+    fi
   fi
   sleep 1
 done
 
 printf '%s\n' "$status_json"
-fail "Managed runtime did not reach process_running=true, healthy=true, ready=true."
+printf '%s\n' "$probe_json"
+fail "Managed runtime never reached full Local Chrome readiness (process + tunnel + user binding + tabs.list())."
