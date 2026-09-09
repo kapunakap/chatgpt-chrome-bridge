@@ -13,7 +13,7 @@ A stale BrowserJack identity/session binding can leave layers 1–3 healthy whil
 Error: User unavailable
 ```
 
-The bridge therefore reports Local Chrome ready only after the user-scoped probe passes `nameSession()` and `tabs.list()` against the stable browser client inside `/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/chrome/scripts/browser-client.mjs`.
+The bridge therefore reports Local Chrome ready only after the user-scoped probe confirms `nameSession()` is available and `tabs.list()` succeeds against the stable browser client inside `/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/chrome/scripts/browser-client.mjs`. If no serving agent exists yet, the startup probe creates it and calls `nameSession()` once before listing tabs.
 
 ## Persistent self-healing
 
@@ -22,7 +22,7 @@ The bridge therefore reports Local Chrome ready only after the user-scoped probe
 - `com.kapunakap.chatgpt-chrome-bridge.local-chrome` owns `tunnel-client` and uses `RunAtLoad`, `KeepAlive`, and a bounded `ThrottleInterval`;
 - `com.kapunakap.chatgpt-chrome-bridge.local-chrome.health` runs a user-scoped BrowserJack readiness check at a bounded interval.
 
-The health watcher persists only non-secret recovery bookkeeping under `~/.config/chatgpt-browser-bridge/local-chrome-health.json` with mode `600`. It probes the BrowserJack child already owned by the discovery wrapper through `~/.config/chatgpt-browser-bridge/browserjack-live-health.sock`; it never starts a second BrowserJack process. The socket parent is mode `700`, the socket is mode `600`, and its only accepted request is the fixed `{"op":"probe"}` operation.
+The health watcher persists only non-secret recovery bookkeeping under `~/.config/chatgpt-browser-bridge/local-chrome-health.json` with mode `600`. It probes the BrowserJack child already owned by the discovery wrapper through `~/.config/chatgpt-browser-bridge/browserjack-live-health.sock`; it never starts a second BrowserJack process. The socket parent is mode `700`, the socket is mode `600`, and its only accepted request is the fixed `{"op":"probe"}` operation. The internal call deliberately has no `x-codex-turn-metadata`, so BrowserJack supplies the same stable stdio-child session policy used for ordinary calls without caller metadata. No external session identifier is captured or persisted. Each probe runs in a scoped async function, reuses `globalThis.agent` when usable, and does not rename an existing serving session.
 
 Recovery policy:
 

@@ -163,12 +163,43 @@ async function leaveStaleSocket(path) {
     path,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   await new Promise((resolveReady, rejectReady) => {
+    let stderr = "";
+    let settled = false;
+    owner.stderr.setEncoding("utf8");
+    owner.stderr.on("data", (chunk) => { stderr += chunk; });
     owner.once("error", rejectReady);
-    owner.stdout.once("data", resolveReady);
+    owner.stdout.once("data", () => {
+      settled = true;
+      resolveReady();
+    });
+    owner.once("exit", (code) => {
+      if (!settled) rejectReady(new Error(`stale socket fixture failed (${code ?? 1}): ${stderr.trim()}`));
+    });
   });
   owner.kill("SIGKILL");
   await new Promise((resolveExit) => owner.once("exit", resolveExit));
   assert.equal((await lstat(path)).isSocket(), true);
+}
+
+async function captureHealthRequest(t) {
+  const fake = await makeFakeChild(t);
+  const proxy = startProxy(fake);
+  t.after(() => proxy.child.kill("SIGKILL"));
+  await waitFor(async () => {
+    try {
+      return (await lstat(fake.socketPath)).isSocket();
+    } catch {
+      return false;
+    }
+  }, "health socket was not exposed");
+  const result = JSON.parse(await requestSocket(fake.socketPath, '{"op":"probe"}\n'));
+  assert.equal(result.ok, true);
+  const logLines = (await readFile(fake.logPath, "utf8")).trim().split("\n");
+  const injected = JSON.parse(logLines.find((line) => line.startsWith("{")));
+  proxy.child.stdin.end();
+  const exit = await proxy.exited;
+  assert.equal(exit.code, 0, proxy.output().stderr);
+  return injected;
 }
 
 test("rejects discovery and forwards all legacy lifecycle messages unchanged", async (t) => {
@@ -283,6 +314,7 @@ test("serves only the fixed probe through the existing private BrowserJack sessi
   const injected = JSON.parse(logLines.find((line) => line.startsWith("{")));
   assert.equal(injected.method, "tools/call");
   assert.equal(injected.params.name, "js");
+  assert.equal(Object.hasOwn(injected.params, "_meta"), false);
   assert.match(injected.id, /^__chatgpt_chrome_bridge_health__:/u);
   assert.match(injected.params.arguments.code, /\/Applications\/ChatGPT\.app\/Contents\/Resources\/plugins\/openai-bundled\/plugins\/chrome\/scripts\/browser-client\.mjs/u);
   assert.match(injected.params.arguments.code, /setupBrowserRuntime\(\)/u);
@@ -301,6 +333,28 @@ test("serves only the fixed probe through the existing private BrowserJack sessi
       return error?.code === "ENOENT";
     }
   }, "health socket was not cleaned up");
+});
+
+test("health probe delegates metadata to the stable serving child and reuses its agent", async (t) => {
+  const injected = await captureHealthRequest(t);
+  const serialized = JSON.stringify(injected);
+  const code = injected.params.arguments.code;
+
+  assert.equal(Object.hasOwn(injected.params, "_meta"), false);
+  assert.doesNotMatch(serialized, /x-codex-turn-metadata|installation_id|session_id|thread_id/u);
+  assert.match(injected.id, /^__chatgpt_chrome_bridge_health__:/u);
+  assert.match(code, /await \(async \(\) => \{/u);
+  assert.match(code, /let healthAgent = globalThis\.agent;/u);
+  assert.match(code, /if \(typeof healthAgent\?\.browsers\?\.list !== 'function'\) \{/u);
+  assert.match(code, /healthAgent = await healthClient\.setupBrowserRuntime\(\);/u);
+  assert.match(code, /globalThis\.agent = healthAgent;/u);
+  assert.match(code, /healthBootstrappedAgent = true;/u);
+  assert.match(code, /const healthBackends = await healthAgent\.browsers\.list\(\);/u);
+  assert.match(code, /const healthChrome = await healthAgent\.browsers\.get\('chrome'\);/u);
+  assert.match(code, /if \(healthBootstrappedAgent\) \{\s*await healthChrome\.nameSession\('chatgpt-chrome-bridge-health'\);\s*\}/u);
+  assert.equal(code.match(/await healthChrome\.nameSession\(/gu)?.length, 1);
+  assert.match(code, /await healthChrome\.tabs\.list\(\);/u);
+  assert.doesNotMatch(code, /\bvar health/u);
 });
 
 test("reduces User unavailable failures to safe readiness fields", async (t) => {

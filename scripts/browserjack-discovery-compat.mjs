@@ -236,31 +236,40 @@ function readinessFromToolResponse(message) {
 }
 
 function fixedProbeRequest(id) {
-  const sessionId = `${healthIdPrefix}${randomUUID()}`;
   const code = `
-    var healthStage = 'setup-runtime';
-    try {
-      var healthClient = await import(${JSON.stringify(browserClientUrl)});
-      globalThis.agent = await healthClient.setupBrowserRuntime();
-      healthStage = 'discovery';
-      var healthBackends = await agent.browsers.list();
-      var healthChromeSummary = healthBackends.find((backend) => backend.family === 'chrome');
-      if (!healthChromeSummary) throw new Error('Chrome backend is not connected');
-      var healthChrome = await agent.browsers.get('chrome');
-      healthStage = 'user-binding';
-      if (typeof healthChrome.nameSession !== 'function') throw new Error('Chrome backend does not expose nameSession()');
-      await healthChrome.nameSession('chatgpt-chrome-bridge-health');
-      healthStage = 'tabs-list';
-      if (typeof healthChrome.tabs?.list !== 'function') throw new Error('Chrome backend does not expose tabs.list()');
-      await healthChrome.tabs.list();
-      nodeRepl.write(JSON.stringify({
-        chromeDiscovered: true,
-        userBindingUsable: true,
-        tabsApiUsable: true,
-      }));
-    } catch (error) {
-      throw new Error('health_stage=' + healthStage + ': ' + String(error));
-    }
+    await (async () => {
+      let healthStage = 'setup-runtime';
+      try {
+        let healthAgent = globalThis.agent;
+        let healthBootstrappedAgent = false;
+        if (typeof healthAgent?.browsers?.list !== 'function') {
+          const healthClient = await import(${JSON.stringify(browserClientUrl)});
+          healthAgent = await healthClient.setupBrowserRuntime();
+          globalThis.agent = healthAgent;
+          healthBootstrappedAgent = true;
+        }
+        healthStage = 'discovery';
+        const healthBackends = await healthAgent.browsers.list();
+        const healthChromeSummary = healthBackends.find((backend) => backend.family === 'chrome');
+        if (!healthChromeSummary) throw new Error('Chrome backend is not connected');
+        const healthChrome = await healthAgent.browsers.get('chrome');
+        healthStage = 'user-binding';
+        if (typeof healthChrome.nameSession !== 'function') throw new Error('Chrome backend does not expose nameSession()');
+        if (healthBootstrappedAgent) {
+          await healthChrome.nameSession('chatgpt-chrome-bridge-health');
+        }
+        healthStage = 'tabs-list';
+        if (typeof healthChrome.tabs?.list !== 'function') throw new Error('Chrome backend does not expose tabs.list()');
+        await healthChrome.tabs.list();
+        nodeRepl.write(JSON.stringify({
+          chromeDiscovered: true,
+          userBindingUsable: true,
+          tabsApiUsable: true,
+        }));
+      } catch (error) {
+        throw new Error('health_stage=' + healthStage + ': ' + String(error));
+      }
+    })();
   `;
   return {
     jsonrpc: "2.0",
@@ -269,16 +278,6 @@ function fixedProbeRequest(id) {
     params: {
       name: "js",
       arguments: { code, title: "Check Local Chrome readiness" },
-      _meta: {
-        "x-codex-turn-metadata": {
-          installation_id: sessionId,
-          session_id: sessionId,
-          thread_id: sessionId,
-          turn_id: "turn-1",
-          request_kind: "agent",
-          turn_started_at_unix_ms: Date.now(),
-        },
-      },
     },
   };
 }
