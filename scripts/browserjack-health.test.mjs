@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import {
   blankHealthState,
   classifyProbeFailure,
+  failedProbeFromResponse,
   isUserUnavailable,
+  isRestartableProbeFailure,
   nextHealthDecision,
   probeBrowserJack,
   readinessFromToolContent,
@@ -19,10 +21,18 @@ import {
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("User unavailable is classified separately from discovery failures", () => {
+test("only bounded serving-session failures are classified as restartable", () => {
   assert.equal(isUserUnavailable("Error: User unavailable"), true);
   assert.equal(classifyProbeFailure("health_stage=user-binding: Error: User unavailable"), "user-unavailable");
+  assert.equal(classifyProbeFailure("BrowserJack health socket unavailable"), "health-socket-unavailable");
+  assert.equal(classifyProbeFailure("BrowserJack readiness probe timed out"), "readiness-timeout");
   assert.equal(classifyProbeFailure("Chrome backend is not connected"), "other");
+  assert.equal(classifyProbeFailure("Browser runtime signature mismatch"), "other");
+  assert.equal(classifyProbeFailure("Browser runtime fingerprint is not approved"), "other");
+  assert.equal(isRestartableProbeFailure("user-unavailable"), true);
+  assert.equal(isRestartableProbeFailure("health-socket-unavailable"), true);
+  assert.equal(isRestartableProbeFailure("readiness-timeout"), true);
+  assert.equal(isRestartableProbeFailure("other"), false);
 });
 
 test("readiness parses the text payload returned by the js MCP tool", () => {
@@ -140,8 +150,25 @@ test("health probe uses the private socket and treats an absent socket as unheal
 
   const unavailable = await probeBrowserJack({ socketPath: join(directory, "absent.sock"), timeout: 100 });
   assert.equal(unavailable.ok, false);
-  assert.equal(unavailable.failureKind, "other");
+  assert.equal(unavailable.failureKind, "health-socket-unavailable");
   assert.equal(unavailable.error, "BrowserJack health socket unavailable");
+});
+
+test("health probe preserves only the serving wrapper readiness-timeout signal", () => {
+  assert.deepEqual(failedProbeFromResponse({
+    chromeDiscovered: true,
+    userBindingUsable: false,
+    tabsApiUsable: false,
+    failureKind: "readiness-timeout",
+  }), {
+    ok: false,
+    chromeDiscovered: true,
+    userBindingUsable: false,
+    tabsApiUsable: false,
+    failureKind: "readiness-timeout",
+    error: "BrowserJack readiness probe timed out",
+  });
+  assert.equal(failedProbeFromResponse({ failureKind: "signature-mismatch" }).failureKind, "other");
 });
 
 test("unrelated failures do not trigger stale-identity recovery", async () => {
@@ -164,8 +191,50 @@ test("unrelated failures do not trigger stale-identity recovery", async () => {
   assert.equal(restarts, 0);
   assert.equal(result.restarted, false);
   assert.equal(result.state.consecutiveUserUnavailable, 0);
+  assert.equal(result.state.consecutiveRestartableFailures, 0);
   assert.equal(result.state.lastFailureKind, "other");
 });
+
+for (const failureKind of ["health-socket-unavailable", "readiness-timeout"]) {
+  test(`two consecutive ${failureKind} failures trigger one bounded restart`, async () => {
+    let state = blankHealthState();
+    let restarts = 0;
+    const failure = {
+      ok: false,
+      failureKind,
+      error: failureKind === "health-socket-unavailable"
+        ? "BrowserJack health socket unavailable"
+        : "BrowserJack readiness probe timed out",
+    };
+
+    let probes = [failure];
+    let result = await runHealthCycle({
+      state,
+      probe: async () => probes.shift(),
+      restart: async () => { restarts += 1; },
+      sleepFn: async () => {},
+      now: () => 1_000,
+    });
+    state = result.state;
+    assert.equal(restarts, 0);
+    assert.equal(state.consecutiveRestartableFailures, 1);
+
+    probes = [failure, { ok: true, chromeDiscovered: true, userBindingUsable: true, tabsApiUsable: true }];
+    result = await runHealthCycle({
+      state,
+      probe: async () => probes.shift(),
+      restart: async () => { restarts += 1; },
+      sleepFn: async () => {},
+      now: () => 10_000,
+      backoffMs: [0],
+    });
+    assert.equal(restarts, 1);
+    assert.equal(result.restarted, true);
+    assert.equal(result.state.status, "healthy");
+    assert.equal(result.state.consecutiveRestartableFailures, 0);
+    assert.equal(result.state.restartAttemptedSinceHealthy, false);
+  });
+}
 
 test("two consecutive stale identity failures trigger one bounded restart then recover", async () => {
   let state = blankHealthState();

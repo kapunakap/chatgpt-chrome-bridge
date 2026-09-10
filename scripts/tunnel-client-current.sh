@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXPECTED_TUNNEL_CLIENT_VERSION="0.0.13"
+EXPECTED_TUNNEL_CLIENT_VERSION="0.0.14"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -21,7 +21,7 @@ actual_version="${actual_version_full%%+*}"
 }
 
 # ChatGPT can omit notifications/initialized between independent hosted stdio
-# commands. tunnel-client 0.0.13 completes that lifecycle and suppresses a later
+# commands. tunnel-client 0.0.14 completes that lifecycle and suppresses a later
 # duplicate only when this compatibility mode is explicitly enabled.
 export MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true
 

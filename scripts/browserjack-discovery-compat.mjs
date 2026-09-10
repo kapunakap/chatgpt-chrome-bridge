@@ -191,6 +191,7 @@ async function prepareSocketPath(path) {
 function healthFailure(error) {
   const text = error instanceof Error ? error.message : String(error ?? "");
   const userUnavailable = /\buser unavailable\b/iu.test(text);
+  const readinessTimedOut = /\bBrowserJack readiness probe timed out\b/u.test(text);
   const chromeDiscovered = /health_stage=(?:user-binding|tabs-list)/u.test(text);
   const userBindingUsable = /health_stage=tabs-list/u.test(text);
   return {
@@ -198,8 +199,12 @@ function healthFailure(error) {
     chromeDiscovered,
     userBindingUsable,
     tabsApiUsable: false,
-    failureKind: userUnavailable ? "user-unavailable" : "other",
-    error: userUnavailable ? "User unavailable" : "BrowserJack readiness probe failed",
+    failureKind: userUnavailable
+      ? "user-unavailable"
+      : readinessTimedOut ? "readiness-timeout" : "other",
+    error: userUnavailable
+      ? "User unavailable"
+      : readinessTimedOut ? "BrowserJack readiness probe timed out" : "BrowserJack readiness probe failed",
   };
 }
 

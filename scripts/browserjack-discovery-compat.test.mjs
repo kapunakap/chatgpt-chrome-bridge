@@ -40,7 +40,9 @@ if (args[0] === "run") {
       appendFileSync(process.env.FAKE_BROWSERJACK_LOG, JSON.stringify(message) + "\\n");
       const response = process.env.FAKE_HEALTH_FAILURE === "user-unavailable"
         ? { jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "Error: User unavailable" }] } }
-        : { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify({ chromeDiscovered: true, userBindingUsable: true, tabsApiUsable: true }) }] } };
+        : process.env.FAKE_HEALTH_FAILURE === "readiness-timeout"
+          ? { jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "BrowserJack readiness probe timed out" }] } }
+          : { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify({ chromeDiscovered: true, userBindingUsable: true, tabsApiUsable: true }) }] } };
       process.stdout.write(JSON.stringify(response) + "\\n");
       return;
     }
@@ -380,6 +382,32 @@ test("reduces User unavailable failures to safe readiness fields", async (t) => 
   });
   assert(!proxy.output().stdout.includes("User unavailable"));
   assert(!proxy.output().stdout.includes("__chatgpt_chrome_bridge_health__"));
+  proxy.child.stdin.end();
+  const result = await proxy.exited;
+  assert.equal(result.code, 0, proxy.output().stderr);
+});
+
+test("reduces readiness timeouts to the exact bounded-recovery signal", async (t) => {
+  const fake = await makeFakeChild(t);
+  const proxy = startProxy(fake, { FAKE_HEALTH_FAILURE: "readiness-timeout" });
+  t.after(() => proxy.child.kill("SIGKILL"));
+  await waitFor(async () => {
+    try {
+      return (await lstat(fake.socketPath)).isSocket();
+    } catch {
+      return false;
+    }
+  }, "health socket was not exposed");
+
+  const probe = JSON.parse(await requestSocket(fake.socketPath, '{"op":"probe"}\n'));
+  assert.deepEqual(probe, {
+    ok: false,
+    chromeDiscovered: false,
+    userBindingUsable: false,
+    tabsApiUsable: false,
+    failureKind: "readiness-timeout",
+    error: "BrowserJack readiness probe timed out",
+  });
   proxy.child.stdin.end();
   const result = await proxy.exited;
   assert.equal(result.code, 0, proxy.output().stderr);

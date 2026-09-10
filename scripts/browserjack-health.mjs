@@ -33,7 +33,40 @@ export function isUserUnavailable(value) {
 }
 
 export function classifyProbeFailure(value) {
-  return isUserUnavailable(value) ? "user-unavailable" : "other";
+  const detail = diagnosticText(value);
+  if (isUserUnavailable(detail)) return "user-unavailable";
+  if (/\bBrowserJack readiness probe timed out\b/u.test(detail)
+    || /\bBrowserJack health socket timed out\b/u.test(detail)) {
+    return "readiness-timeout";
+  }
+  if (/\bBrowserJack health socket unavailable\b/u.test(detail)) {
+    return "health-socket-unavailable";
+  }
+  return "other";
+}
+
+export function isRestartableProbeFailure(failureKind) {
+  return failureKind === "user-unavailable"
+    || failureKind === "health-socket-unavailable"
+    || failureKind === "readiness-timeout";
+}
+
+export function failedProbeFromResponse(value) {
+  const failureKind = value?.failureKind === "user-unavailable"
+    ? "user-unavailable"
+    : value?.failureKind === "readiness-timeout" ? "readiness-timeout" : "other";
+  return {
+    ok: false,
+    chromeDiscovered: value?.chromeDiscovered === true,
+    userBindingUsable: value?.userBindingUsable === true,
+    tabsApiUsable: value?.tabsApiUsable === true,
+    failureKind,
+    error: failureKind === "user-unavailable"
+      ? "User unavailable"
+      : failureKind === "readiness-timeout"
+        ? "BrowserJack readiness probe timed out"
+        : "BrowserJack readiness probe failed",
+  };
 }
 
 export function readinessFromToolContent(content) {
@@ -52,6 +85,7 @@ export function blankHealthState() {
     version: 1,
     status: "unknown",
     consecutiveUserUnavailable: 0,
+    consecutiveRestartableFailures: 0,
     restartAttemptedSinceHealthy: false,
     lastRestartAt: null,
     lastProbeAt: null,
@@ -74,6 +108,7 @@ export function nextHealthDecision(previous, probe, now = Date.now(), {
         ...base,
         status: "healthy",
         consecutiveUserUnavailable: 0,
+        consecutiveRestartableFailures: 0,
         restartAttemptedSinceHealthy: false,
         lastProbeAt: now,
         lastSuccessAt: now,
@@ -86,12 +121,20 @@ export function nextHealthDecision(previous, probe, now = Date.now(), {
 
   const failure = diagnosticText(probe.error ?? probe.detail ?? "BrowserJack readiness probe failed");
   const failureKind = probe.failureKind ?? classifyProbeFailure(failure);
+  const restartable = isRestartableProbeFailure(failureKind);
   const consecutiveUserUnavailable = failureKind === "user-unavailable"
     ? Number(base.consecutiveUserUnavailable ?? 0) + 1
     : 0;
+  const previousRestartableFailures = Math.max(
+    Number(base.consecutiveRestartableFailures ?? 0),
+    Number(base.consecutiveUserUnavailable ?? 0),
+  );
+  const consecutiveRestartableFailures = restartable
+    ? previousRestartableFailures + 1
+    : 0;
   const restartRecently = Number.isFinite(base.lastRestartAt) && now - base.lastRestartAt < minimumRestartIntervalMs;
-  const shouldRestart = failureKind === "user-unavailable" &&
-    consecutiveUserUnavailable >= threshold &&
+  const shouldRestart = restartable &&
+    consecutiveRestartableFailures >= threshold &&
     base.restartAttemptedSinceHealthy !== true &&
     !restartRecently;
 
@@ -101,6 +144,7 @@ export function nextHealthDecision(previous, probe, now = Date.now(), {
       ...base,
       status: "unhealthy",
       consecutiveUserUnavailable,
+      consecutiveRestartableFailures,
       lastProbeAt: now,
       lastFailureKind: failureKind,
       lastFailure: failure,
@@ -137,14 +181,7 @@ export async function probeBrowserJack({
     });
     const value = JSON.parse(response);
     if (value?.ok !== true) {
-      return {
-        ok: false,
-        chromeDiscovered: value?.chromeDiscovered === true,
-        userBindingUsable: value?.userBindingUsable === true,
-        tabsApiUsable: value?.tabsApiUsable === true,
-        failureKind: value?.failureKind === "user-unavailable" ? "user-unavailable" : "other",
-        error: value?.failureKind === "user-unavailable" ? "User unavailable" : "BrowserJack readiness probe failed",
-      };
+      return failedProbeFromResponse(value);
     }
     const readiness = {
       chromeDiscovered: value.chromeDiscovered === true,
@@ -157,13 +194,22 @@ export async function probeBrowserJack({
     return { ok: true, ...readiness };
   } catch (error) {
     const detail = diagnosticText(error instanceof Error ? error.message : String(error));
+    const failureKind = error?.code === "ENOENT" || error?.code === "ECONNREFUSED"
+      ? "health-socket-unavailable"
+      : classifyProbeFailure(detail);
     return {
       ok: false,
       chromeDiscovered: false,
       userBindingUsable: false,
       tabsApiUsable: false,
-      failureKind: classifyProbeFailure(detail),
-      error: isUserUnavailable(detail) ? "User unavailable" : "BrowserJack health socket unavailable",
+      failureKind,
+      error: failureKind === "user-unavailable"
+        ? "User unavailable"
+        : failureKind === "health-socket-unavailable"
+          ? "BrowserJack health socket unavailable"
+          : failureKind === "readiness-timeout"
+            ? "BrowserJack readiness probe timed out"
+            : "BrowserJack readiness probe failed",
     };
   }
 }

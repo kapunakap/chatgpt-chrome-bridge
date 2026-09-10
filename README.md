@@ -40,7 +40,7 @@ Successful `js_reset` responses and the live `js` tool description include the c
 - the official ChatGPT/Codex Chrome integration already installed and working in Chrome
 - Homebrew
 - Node.js 22+ (the bootstrap script installs Homebrew `node@22` when needed)
-- official OpenAI `tunnel-client 0.0.13` (the bootstrap upgrades through `openai/tools` and fails closed on another version)
+- official OpenAI `tunnel-client 0.0.14` (the bootstrap upgrades through `openai/tools` and fails closed on another version)
 - an OpenAI Secure MCP Tunnel associated with your Platform organization and ChatGPT workspace
 - a runtime API key with **Tunnels Read + Use**, stored in a local mode-`600` file
 - ChatGPT developer mode / permission to create a custom app
@@ -127,7 +127,7 @@ bash scripts/service.sh install
 
 The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the replacement process to become running, healthy, and ready. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits. This whole-stack restart is also how a compatible ChatGPT app generation change gets a fresh stdio MCP session after validation; a manual non-launchd connection must be started again by the user.
 
-The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.13` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
+The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.14` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
 
 Do not run `connect-tunnel.sh` after persistence is installed. launchd must be the only owner of the tunnel process; use the service commands below instead. If you used a custom `TUNNEL_ALIAS`, `TUNNEL_CLIENT_PROFILE_DIR`, or `CONTROL_PLANE_RUNTIME_API_KEY_FILE`, pass the same override when installing or operating the service.
 
@@ -180,7 +180,7 @@ Validate the local BrowserJack handshake and managed runtime:
 bash scripts/status.sh
 ```
 
-This also fails closed unless tunnel-client is exactly `0.0.13` and reports the initialized-notification compatibility mode enabled.
+This also fails closed unless tunnel-client is exactly `0.0.14` and reports the initialized-notification compatibility mode enabled.
 
 Run the direct MCP/Chrome smoke test:
 
