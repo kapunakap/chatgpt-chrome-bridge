@@ -188,6 +188,7 @@ function runtimeEnvironment(base, runtime) {
     BROWSER_USE_CODEX_APP_BUILD_FLAVOR: runtime.buildFlavor,
     NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS: runtime.nativePipeConnectTimeoutMs,
     BROWSER_USE_AVAILABLE_BACKENDS: runtime.availableBackends,
+    BROWSER_USE_TINYSKY_ENABLED: runtime.tinyskyEnabled ?? "0",
   };
   delete env.BROWSERJACK_ALLOW_UNAPPROVED_CANDIDATE;
   return env;

@@ -68,6 +68,7 @@ validated_runtime="$(BROWSERJACK_ALLOW_UNAPPROVED_CANDIDATE="$candidate_env" \
   node "$RUNTIME_HELPER" resolve --app "$APP" --manifest "$MANIFEST")"
 extension_id="$(printf '%s' "$validated_runtime" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).extensionId))')"
 native_host_name="$(printf '%s' "$validated_runtime" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).nativeHostName))')"
+tinysky_enabled="$(printf '%s' "$validated_runtime" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).tinyskyEnabled ?? "0"))')"
 [[ "$native_host_name" == "$EXPECTED_HOST_NAME" ]] || fail "Signed native-host name does not match the approved bridge identity"
 
 trusted_services="$(node -e 'console.log(JSON.stringify({browser:process.argv[1]}))' "$SERVICE")"
@@ -84,6 +85,7 @@ export BROWSER_USE_CODEX_APP_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print 
 export BROWSER_USE_CODEX_APP_BUILD_FLAVOR="prod"
 export NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS="1000"
 export BROWSER_USE_AVAILABLE_BACKENDS="chrome"
+export BROWSER_USE_TINYSKY_ENABLED="$tinysky_enabled"
 
 if [[ "$candidate" == true && "${1:-}" == "doctor" ]]; then
   probe_root="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt-browser-bridge-candidate.XXXXXX")"

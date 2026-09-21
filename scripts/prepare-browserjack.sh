@@ -127,6 +127,7 @@ new = '''    codexPath: await realpath(validatedRuntime?.codexCliPath ?? join(re
     browserServiceSha256: await sha256File(browserServicePath),
     trustedCodePaths: validatedRuntime?.trustedCodePaths ?? [chromePluginPath],
     availableBackends: validatedRuntime?.availableBackends ?? "chrome",
+    tinyskyEnabled: validatedRuntime?.tinyskyEnabled ?? "0",
     nativePipeConnectTimeoutMs: validatedRuntime?.nativePipeConnectTimeoutMs ?? "1000",
     buildFlavor: validatedRuntime?.buildFlavor ?? "prod",
     appServerProtocolVersion: validatedRuntime?.appServerProtocolVersion ?? null,
@@ -323,6 +324,7 @@ new = '''  browserClientSha256: string;
   extensionIds: string[];
   trustedCodePaths: string[];
   availableBackends: string;
+  tinyskyEnabled: string;
   nativePipeConnectTimeoutMs: string;
   buildFlavor: string;
   appServerProtocolVersion: number | null;
@@ -354,7 +356,7 @@ new = '''      NODE_REPL_NODE_MODULE_DIRS: runtime.nodeModulesPath,
       NODE_REPL_TRUSTED_SERVICES: JSON.stringify({ browser: runtime.browserServicePath }),
       NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS: runtime.nativePipeConnectTimeoutMs,
       BROWSER_USE_AVAILABLE_BACKENDS: runtime.availableBackends,
-      BROWSER_USE_TINYSKY_ENABLED: process.env.BROWSER_USE_TINYSKY_ENABLED ?? "0",
+      BROWSER_USE_TINYSKY_ENABLED: runtime.tinyskyEnabled,
       BROWSER_USE_CODEX_APP_VERSION: runtime.appVersion,
       BROWSER_USE_CODEX_APP_BUILD_VERSION: runtime.buildVersion,
       BROWSER_USE_CODEX_APP_BUILD_FLAVOR: runtime.buildFlavor,
@@ -372,6 +374,7 @@ new = '''  browserClientSha256: "d".repeat(64),
   extensionIds: ["abcdefghijklmnop"],
   trustedCodePaths: ["/tmp/example/.codex/plugins/chrome", "/tmp/example/.codex/node_modules"],
   availableBackends: "chrome",
+  tinyskyEnabled: "0",
   nativePipeConnectTimeoutMs: "1000",
   buildFlavor: "prod",
   appServerProtocolVersion: 2,
@@ -394,6 +397,7 @@ addition = '''test("enables the trusted browser RPC service from the validated r
   });
   assert.equal(launch.env.NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S, runtime.browserClientSha256);
   assert.equal(launch.env.BROWSER_USE_AVAILABLE_BACKENDS, "chrome");
+  assert.equal(launch.env.BROWSER_USE_TINYSKY_ENABLED, runtime.tinyskyEnabled);
   const profile = launch.args[launch.args.indexOf("-c") + 1];
   assert.match(profile, /permissions\\.claude_browser_node_repl=\\{.*network=\\{enabled=true\\}/);
   assert.ok(launch.env.NODE_REPL_TRUSTED_CODE_PATHS.includes(runtime.trustedCodePaths[0]));
