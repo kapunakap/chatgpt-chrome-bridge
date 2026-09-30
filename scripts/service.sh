@@ -114,7 +114,12 @@ launchd_process_alive() {
   state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
   pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
   [[ "$state" == "running" && -n "$pid" ]] || return 1
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null && return 0
+
+  launch_output="$(launchctl print "$SERVICE_TARGET" 2>/dev/null)" || return 1
+  state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
+  pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
+  [[ "$state" == "running" && -n "$pid" ]]
 }
 
 browser_probe() {
@@ -378,7 +383,7 @@ service_status() {
     state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
     pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
     umask_value="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*umask = //p' | head -n 1)"
-    if [[ "$state" == "running" && -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    if launchd_process_alive; then
       pid_alive=true
       running=true
     fi

@@ -44,7 +44,12 @@ if [[ -f "$SERVICE_PLIST" ]]; then
   launch_pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
   launch_umask="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*umask = //p' | head -n 1)"
   [[ "$launch_state" == "running" && -n "$launch_pid" ]] || fail "LaunchAgent is loaded but not running."
-  kill -0 "$launch_pid" 2>/dev/null || fail "LaunchAgent PID is not alive."
+  if ! kill -0 "$launch_pid" 2>/dev/null; then
+    launch_output="$(launchctl print "$SERVICE_TARGET" 2>/dev/null)" || fail "LaunchAgent PID is not alive."
+    launch_state="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)"
+    launch_pid="$(printf '%s\n' "$launch_output" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)"
+    [[ "$launch_state" == "running" && -n "$launch_pid" ]] || fail "LaunchAgent PID is not alive."
+  fi
   launch_agent_running=true
   printf 'launch_agent_loaded=true\n'
   printf 'launch_agent_running=true\n'
