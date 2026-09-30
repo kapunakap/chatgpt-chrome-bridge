@@ -116,8 +116,9 @@ install_service() {
     launchctl bootout "$SERVICE_TARGET"
   fi
   install -m 600 "$rendered" "$PLIST_PATH"
-  launchctl enable "$SERVICE_TARGET"
   launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"
+  launchctl enable "$SERVICE_TARGET"
+  launchctl kickstart "$SERVICE_TARGET"
   rm -f "$rendered"
   rmdir "$tmp_dir"
   trap - EXIT
@@ -131,8 +132,9 @@ start_service() {
   if service_loaded; then
     launchctl kickstart "$SERVICE_TARGET" >/dev/null 2>&1 || true
   else
-    launchctl enable "$SERVICE_TARGET"
     launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"
+    launchctl enable "$SERVICE_TARGET"
+    launchctl kickstart "$SERVICE_TARGET"
   fi
   printf 'HEALTH_WATCH_STARTED=1\n'
 }

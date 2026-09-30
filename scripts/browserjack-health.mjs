@@ -18,7 +18,7 @@ const defaultStateFile = process.env.LOCAL_CHROME_HEALTH_STATE_FILE ?? join(
 );
 const defaultLabel = process.env.LOCAL_CHROME_LAUNCH_AGENT_LABEL ?? "com.kapunakap.chatgpt-chrome-bridge.local-chrome";
 const defaultAlias = process.env.TUNNEL_ALIAS ?? "local-chrome";
-const timeoutMs = 30_000;
+const defaultProbeTimeoutMs = 30_000;
 const restartThreshold = 2;
 const minRestartIntervalMs = 5 * 60_000;
 const recoveryBackoffMs = [2_000, 5_000, 15_000];
@@ -154,7 +154,7 @@ export function nextHealthDecision(previous, probe, now = Date.now(), {
 
 export async function probeBrowserJack({
   socketPath = defaultHealthSocket,
-  timeout = timeoutMs,
+  timeout = defaultProbeTimeoutMs,
 } = {}) {
   try {
     const response = await new Promise((resolveProbe, rejectProbe) => {
@@ -421,10 +421,20 @@ function outputProbe(probe) {
   process.stdout.write(`${JSON.stringify(probe)}\n`);
 }
 
+export function parseProbeTimeout(args) {
+  const timeoutIndex = args.indexOf("--timeout-ms");
+  if (timeoutIndex === -1) return defaultProbeTimeoutMs;
+  const value = Number(args[timeoutIndex + 1]);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("--timeout-ms must be a positive integer");
+  }
+  return value;
+}
+
 async function main() {
   const command = process.argv[2] ?? "probe";
   if (command === "probe") {
-    const result = await probeBrowserJack();
+    const result = await probeBrowserJack({ timeout: parseProbeTimeout(process.argv.slice(3)) });
     outputProbe(result);
     process.exitCode = result.ok ? 0 : 2;
     return;

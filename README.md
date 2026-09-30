@@ -125,7 +125,9 @@ After the first connection succeeds, install the user-level macOS LaunchAgent:
 bash scripts/service.sh install
 ```
 
-The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the replacement process to become running, healthy, and ready. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits. This whole-stack restart is also how a compatible ChatGPT app generation change gets a fresh stdio MCP session after validation; a manual non-launchd connection must be started again by the user.
+The installer reuses the existing `local-chrome` profile and runtime-key file. It stops the manually managed runtime before loading launchd, then waits for the launchd-owned main service to be loaded, running, and stable. Startup reports `browser_readiness=pending-hosted-initialize` because a fresh stdio session intentionally buffers non-`initialize` MCP messages until hosted ChatGPT initializes it; the installer and `service.sh start|restart` do not use the private BrowserJack probe as a startup gate. The LaunchAgent starts at login and restarts `tunnel-client` if the process exits. This whole-stack restart is also how a compatible ChatGPT app generation change gets a fresh stdio MCP session after validation; a manual non-launchd connection must be started again by the user.
+
+Use `bash scripts/service.sh status` or `bash scripts/status.sh` after the hosted session exists for strict readiness. Those checks require tunnel health plus the BrowserJack probe, current-user binding, and `tabs.list()`; a started launchd process alone is not bridge readiness.
 
 The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.14` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
 

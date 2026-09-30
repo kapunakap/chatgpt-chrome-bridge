@@ -23,6 +23,12 @@ TUNNEL_CLIENT_SHIM="$REPO_ROOT/scripts/tunnel-client-current.sh"
 BROWSERJACK_SHIM="${BROWSERJACK_COMMAND:-$REPO_ROOT/scripts/browserjack-discovery-compat.mjs}"
 HEALTH_PROBE="$REPO_ROOT/scripts/browserjack-health.mjs"
 HEALTH_SERVICE="$REPO_ROOT/scripts/health-service.sh"
+# A fresh hosted stdio session buffers non-initialize MCP messages until the
+# hosted client initializes it, so startup gates only the launchd-owned main
+# process. BrowserJack readiness remains a status/watcher concern.
+STARTUP_STABILITY_CHECKS=3
+STARTUP_MAX_CHECKS=10
+STARTUP_STABILITY_INTERVAL_SECONDS=1
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -99,23 +105,6 @@ raise SystemExit(0 if value.get("process_running") is True else 1)
 PY
 }
 
-runtime_ready() {
-  local status_json=''
-
-  status_json="$("$TUNNEL_CLIENT_SHIM" runtimes --json status "$ALIAS" 2>/dev/null)" || return 1
-  STATUS_JSON="$status_json" python3 - <<'PY'
-import json
-import os
-
-try:
-    value = json.loads(os.environ["STATUS_JSON"])
-except (KeyError, json.JSONDecodeError):
-    raise SystemExit(1)
-ready = all(value.get(name) is True for name in ("healthy", "ready"))
-raise SystemExit(0 if ready else 1)
-PY
-}
-
 launchd_process_alive() {
   local launch_output=''
   local state=''
@@ -140,48 +129,49 @@ wait_for_runtime_stop() {
   fail "Tunnel runtime did not stop within 20 seconds."
 }
 
-wait_for_runtime_ready() {
-  local probe_json=''
-  local last_probe='BrowserJack user-scoped readiness probe has not run yet.'
+print_startup_status() {
+  printf 'launch_agent_loaded=true\n'
+  printf 'launch_agent_pid_alive=true\n'
+  printf 'launch_agent_owns_process=true\n'
+  printf 'runtime_process_owner=launchd\n'
+  printf 'process_running=true\n'
+  printf 'browser_readiness=pending-hosted-initialize\n'
+  printf 'tunnel_readiness=pending-hosted-initialize\n'
+  printf 'startup_ready=true\n'
+}
 
-  for _ in {1..60}; do
-    if service_loaded && launchd_process_alive && runtime_ready; then
-      set +e
-      probe_json="$(browser_probe 2>&1)"
-      probe_rc=$?
-      set -e
-      if [[ "$probe_rc" -eq 0 ]]; then
-        printf 'launch_agent_loaded=true\n'
-        printf 'launch_agent_owns_process=true\n'
-        printf 'launch_agent_pid_alive=true\n'
-        printf 'runtime_process_owner=launchd\n'
-        if runtime_running; then
-          printf 'tunnel_managed_runtime_process_running=true\n'
-        else
-          printf 'tunnel_managed_runtime_process_running=false\n'
-        fi
-        printf 'tunnel_process_running=true\n'
-        printf 'process_running=true\n'
-        printf 'tunnel_healthy=true\n'
-        printf 'tunnel_ready=true\n'
-        PROBE_JSON="$probe_json" python3 - <<'PY'
-import json
-import os
+wait_for_launchd_startup() {
+  local consecutive_checks=0
+  local last_check='LaunchAgent has not been checked yet.'
 
-value = json.loads(os.environ["PROBE_JSON"])
-print(f"chrome_discovered={str(value.get('chromeDiscovered') is True).lower()}")
-print(f"user_binding_ready={str(value.get('userBindingUsable') is True).lower()}")
-print(f"tabs_api_ready={str(value.get('tabsApiUsable') is True).lower()}")
-print("browser_ready=true")
-print("ready=true")
-PY
+  printf 'Starting Local Chrome service; waiting for the launchd-owned main service to stabilize (%s consecutive checks, max %s checks)...\n' \
+    "$STARTUP_STABILITY_CHECKS" "$STARTUP_MAX_CHECKS"
+  for ((attempt = 1; attempt <= STARTUP_MAX_CHECKS; attempt++)); do
+    if ! service_loaded; then
+      last_check='LaunchAgent is not loaded.'
+      consecutive_checks=0
+    elif ! launchd_process_alive; then
+      last_check='LaunchAgent is loaded but its process is not running.'
+      consecutive_checks=0
+    else
+      consecutive_checks=$((consecutive_checks + 1))
+      last_check='LaunchAgent is loaded with an alive running PID.'
+      printf '%s Stability check %d/%s passed (%d/%s consecutive).\n' \
+        "$last_check" "$attempt" "$STARTUP_MAX_CHECKS" "$consecutive_checks" "$STARTUP_STABILITY_CHECKS"
+      if (( consecutive_checks >= STARTUP_STABILITY_CHECKS )); then
+        print_startup_status
         return 0
       fi
-      last_probe="$probe_json"
     fi
-    sleep 1
+    if (( consecutive_checks == 0 )); then
+      printf 'Stability check %d/%s failed; consecutive counter reset: %s\n' \
+        "$attempt" "$STARTUP_MAX_CHECKS" "$last_check"
+    fi
+    if (( attempt < STARTUP_MAX_CHECKS )); then
+      sleep "$STARTUP_STABILITY_INTERVAL_SECONDS"
+    fi
   done
-  fail "LaunchAgent/tunnel became available but BrowserJack user/session readiness did not pass: ${last_probe:0:1000}"
+  fail "LaunchAgent startup did not stabilize after $STARTUP_MAX_CHECKS checks: $last_check"
 }
 
 stop_runtime_if_running() {
@@ -204,7 +194,8 @@ render_plist() {
     "$HOME" \
     "$SERVICE_PATH" \
     "$STDOUT_LOG" \
-    "$STDERR_LOG" <<'PY'
+    "$STDERR_LOG" \
+    "${CHATGPT_APP_PATH:-}" <<'PY'
 import plistlib
 import sys
 
@@ -218,7 +209,16 @@ import sys
     service_path,
     stdout_log,
     stderr_log,
+    chatgpt_app_path,
 ) = sys.argv[1:]
+
+environment = {
+    "HOME": home,
+    "PATH": service_path,
+    "MCP_STDIO_SEND_INITIALIZED_NOTIFICATION": "true",
+}
+if chatgpt_app_path:
+    environment["CHATGPT_APP_PATH"] = chatgpt_app_path
 
 value = {
     "Label": label,
@@ -236,11 +236,7 @@ value = {
     "ThrottleInterval": 30,
     "Umask": 0o077,
     "WorkingDirectory": "/",
-    "EnvironmentVariables": {
-        "HOME": home,
-        "PATH": service_path,
-        "MCP_STDIO_SEND_INITIALIZED_NOTIFICATION": "true",
-    },
+    "EnvironmentVariables": environment,
     "StandardOutPath": stdout_log,
     "StandardErrorPath": stderr_log,
 }
@@ -251,17 +247,15 @@ PY
 }
 
 bootstrap_service() {
+  if ! service_loaded; then
+    if ! launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"; then
+      launchctl bootout "$SERVICE_TARGET" >/dev/null 2>&1 || true
+      sleep 1
+      launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"
+    fi
+  fi
   launchctl enable "$SERVICE_TARGET"
-  if service_loaded; then
-    launchctl kickstart -k "$SERVICE_TARGET"
-    return
-  fi
-
-  if ! launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"; then
-    launchctl bootout "$SERVICE_TARGET" >/dev/null 2>&1 || true
-    sleep 1
-    launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH"
-  fi
+  launchctl kickstart -k "$SERVICE_TARGET"
 }
 
 install_service() {
@@ -292,13 +286,12 @@ install_service() {
   install -m 600 "$rendered_plist" "$PLIST_PATH"
   bootstrap_service
   bash "$HEALTH_SERVICE" install
-  wait_for_runtime_ready
+  wait_for_launchd_startup
   rm -f "$rendered_plist"
   rmdir "$service_tmp_dir"
   trap - EXIT
   printf 'SERVICE_INSTALLED=1\n'
   printf 'HEALTH_WATCH_INSTALLED=1\n'
-  printf 'SERVICE_READY=1\n'
 }
 
 start_service() {
@@ -310,7 +303,7 @@ start_service() {
     bootstrap_service
   fi
   bash "$HEALTH_SERVICE" start
-  wait_for_runtime_ready
+  wait_for_launchd_startup
   printf 'SERVICE_STARTED=1\n'
 }
 
@@ -344,7 +337,7 @@ restart_service() {
   if [[ -f "$HEALTH_PLIST_PATH" ]]; then
     bash "$HEALTH_SERVICE" start >/dev/null
   fi
-  wait_for_runtime_ready
+  wait_for_launchd_startup
   printf 'SERVICE_RESTARTED=1\n'
 }
 

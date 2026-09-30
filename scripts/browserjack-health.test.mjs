@@ -12,6 +12,7 @@ import {
   isUserUnavailable,
   isRestartableProbeFailure,
   nextHealthDecision,
+  parseProbeTimeout,
   probeBrowserJack,
   readinessFromToolContent,
   restartLaunchAgentAndWait,
@@ -152,6 +153,15 @@ test("health probe uses the private socket and treats an absent socket as unheal
   assert.equal(unavailable.ok, false);
   assert.equal(unavailable.failureKind, "health-socket-unavailable");
   assert.equal(unavailable.error, "BrowserJack health socket unavailable");
+});
+
+test("startup probe timeout contract keeps the watcher default and accepts a short CLI timeout", () => {
+  assert.equal(parseProbeTimeout([]), 30_000);
+  assert.equal(parseProbeTimeout(["--timeout-ms", "2000"]), 2_000);
+  assert.throws(
+    () => parseProbeTimeout(["--timeout-ms", "0"]),
+    /--timeout-ms must be a positive integer/u,
+  );
 });
 
 test("health probe preserves only the serving wrapper readiness-timeout signal", () => {

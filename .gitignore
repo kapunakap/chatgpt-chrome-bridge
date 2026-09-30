@@ -6,3 +6,5 @@
 support-bundle*
 *.support.json
 .tmp/
+.local-chrome-runtime/
+.local-chrome-staging.*

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -20,6 +20,10 @@ const defaultRegistry = join(
 const defaultNodeReplConfig = join(homedir(), ".codex/config.toml");
 const expectedChannel = "prod";
 const expectedProtocolVersion = 2;
+const signedCodexRelativePaths = [
+  "codex-cli/CodexCLI.app/Contents/MacOS/codex",
+  "codex",
+];
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -54,6 +58,29 @@ async function existingRealpath(path, label) {
   } catch {
     throw new Error(`${label} is missing: ${path}`);
   }
+}
+
+export async function resolveSignedCodexPath(appResourcesRoot) {
+  const resourcesRoot = await existingRealpath(appResourcesRoot, "ChatGPT resources");
+  const candidates = signedCodexRelativePaths.map((relativePath) => join(resourcesRoot, relativePath));
+
+  for (const candidate of candidates) {
+    let resolved;
+    try {
+      resolved = await realpath(candidate);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw new Error(`Could not resolve ChatGPT codex binary ${candidate}: ${error.message}`, { cause: error });
+    }
+    contained(resourcesRoot, resolved, "ChatGPT codex binary");
+    const details = await stat(resolved);
+    if (!details.isFile()) {
+      throw new Error(`ChatGPT codex binary is not a regular file: ${resolved}`);
+    }
+    return resolved;
+  }
+
+  throw new Error(`ChatGPT codex binary is missing; checked ${candidates.join(", ")}`);
 }
 
 async function sha256(path) {
@@ -268,7 +295,7 @@ export async function resolveRuntime({
     "ChatGPT Chrome plugin",
   );
   const appResourcesRoot = await existingRealpath(join(appPath, "Contents/Resources"), "ChatGPT resources");
-  const appCodexPath = await existingRealpath(join(appResourcesRoot, "codex"), "ChatGPT codex binary");
+  const appCodexPath = await resolveSignedCodexPath(appResourcesRoot);
   const manifest = await readManifest(manifestPath);
   const v2 = await resolveV2({
     registryPath,

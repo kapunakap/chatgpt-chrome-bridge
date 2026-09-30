@@ -1,14 +1,66 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
+import { join } from "node:path";
 
 import {
   parseLegacyExtensionMetadata,
   parsePluralExtensionMetadata,
 } from "./browserjack-fingerprint.mjs";
-import { selectV2RuntimeEntry } from "./browserjack-runtime.mjs";
+import { resolveSignedCodexPath, selectV2RuntimeEntry } from "./browserjack-runtime.mjs";
 
 const chromeId = "hehggadaopoacecdllhhajmbjkdcmajg";
 const edgeId = "odlomjlbamekndcpllcnffbgeohgkmjh";
+
+async function withResources(setup) {
+  const root = await mkdtemp(join(process.cwd(), ".browserjack-runtime-test-"));
+  try {
+    const expected = await setup(root);
+    return { expected, resolved: await resolveSignedCodexPath(root) };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("resolves the current nested signed Codex executable", async () => {
+  const { expected, resolved } = await withResources(async (root) => {
+    const directory = join(root, "codex-cli/CodexCLI.app/Contents/MacOS");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "codex");
+    await writeFile(path, "current");
+    await writeFile(join(root, "codex"), "legacy");
+    return path;
+  });
+  assert.equal(resolved, expected);
+});
+
+test("retains the legacy top-level Codex layout", async () => {
+  const { expected, resolved } = await withResources(async (root) => {
+    const path = join(root, "codex");
+    await writeFile(path, "legacy");
+    return path;
+  });
+  assert.equal(resolved, expected);
+});
+
+test("rejects a Codex candidate that escapes the signed app resources", async () => {
+  const root = await mkdtemp(join(process.cwd(), ".browserjack-runtime-test-"));
+  const outside = await mkdtemp(join(process.cwd(), ".browserjack-runtime-outside-"));
+  try {
+    const target = join(outside, "codex");
+    await writeFile(target, "outside");
+    const directory = join(root, "codex-cli/CodexCLI.app/Contents/MacOS");
+    await mkdir(directory, { recursive: true });
+    await symlink(target, join(directory, "codex"));
+    await assert.rejects(
+      () => resolveSignedCodexPath(root),
+      /ChatGPT codex binary escapes its trusted root/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
 
 test("plural extension metadata selects the signed Chrome store ID", () => {
   const value = parsePluralExtensionMetadata({
