@@ -12,6 +12,7 @@ import {
   replayInitialization,
   retryDelay,
   runtimeGeneration,
+  runtimeInspectionReason,
   shouldRevalidateRuntime,
 } from "./browserjack-supervisor.mjs";
 
@@ -35,6 +36,43 @@ test("unchanged generation stays in the current supervisor process", () => {
     activeSnapshot: runtime,
     currentSnapshot: { ...runtime },
   }), false);
+});
+
+test("idle polling skips expensive inspection until a change, retry, or safety interval", () => {
+  const base = {
+    lastInspectionAt: 10_000,
+    fullInspectionMs: 300_000,
+    degradedInspectionMs: 60_000,
+    now: 15_000,
+  };
+  assert.equal(runtimeInspectionReason(base), null);
+  assert.equal(runtimeInspectionReason({ ...base, runtimeDirty: true }), "change");
+  assert.equal(runtimeInspectionReason({
+    ...base,
+    blockedRetryable: true,
+    blockedRetryAt: 15_000,
+  }), "retry");
+  assert.equal(runtimeInspectionReason({ ...base, now: 310_000 }), "periodic");
+  assert.equal(runtimeInspectionReason({
+    ...base,
+    watcherHealthy: false,
+    now: 70_000,
+  }), "periodic");
+});
+
+test("slow runtime inspections cannot overlap", () => {
+  assert.equal(runtimeInspectionReason({
+    runtimeDirty: true,
+    inspectionInFlight: true,
+    lastInspectionAt: 0,
+    now: 999_999,
+  }), null);
+  assert.equal(runtimeInspectionReason({
+    runtimeDirty: true,
+    transitioning: true,
+    lastInspectionAt: 0,
+    now: 999_999,
+  }), null);
 });
 
 test("compatible generation change requests an outer restart without replacement or replay", async () => {
