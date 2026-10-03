@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,7 @@ const defaultApprovalsFile = join(
   ".config/chatgpt-browser-bridge/browser-runtime-approvals.json",
 );
 const defaultPollMs = 5_000;
+const defaultFullInspectionMs = 300_000;
 const maxDiagnosticBytes = 16_384;
 // Cold-starting the verified Node REPL can exceed five seconds after a desktop update.
 // Keep initialization bounded, but allow one normal runtime startup to complete.
@@ -78,6 +80,87 @@ export function initializationError(line, reason) {
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isInteger(value) && value >= 1_000 && value <= 60_000 ? value : fallback;
+}
+
+function durationEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= 60_000 && value <= 3_600_000 ? value : fallback;
+}
+
+async function statToken(path) {
+  try {
+    const details = await stat(path);
+    return [
+      details.dev,
+      details.ino,
+      details.mode,
+      details.size,
+      details.mtimeMs,
+      details.ctimeMs,
+    ].join(":");
+  } catch (error) {
+    return `error:${error?.code ?? error?.name ?? "unknown"}`;
+  }
+}
+
+export async function runtimeChangeStamp({
+  appPath = defaultApp,
+  manifestPath = defaultManifest,
+  arch = process.arch,
+} = {}) {
+  const pluginPath = join(appPath, "Contents/Resources/plugins/openai-bundled/plugins/chrome");
+  const paths = [
+    appPath,
+    join(appPath, "Contents/Info.plist"),
+    join(appPath, "Contents/MacOS/ChatGPT"),
+    join(appPath, "Contents/_CodeSignature/CodeResources"),
+    join(pluginPath, ".codex-plugin/plugin.json"),
+    join(pluginPath, "scripts/extension-ids.json"),
+    join(pluginPath, "scripts/extension-id.json"),
+    join(pluginPath, "scripts/browser-client.mjs"),
+    join(pluginPath, "scripts/browser-service.mjs"),
+    join(pluginPath, "extension-host/macos", arch, "ChatGPT for Chrome"),
+    manifestPath,
+  ];
+  let manifestMarker = "";
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    if (typeof manifest.path === "string" && manifest.path.length > 0) {
+      paths.push(manifest.path);
+    } else {
+      manifestMarker = "manifest-path-missing";
+    }
+  } catch (error) {
+    manifestMarker = `manifest-read:${error?.code ?? error?.name ?? "unknown"}`;
+  }
+
+  const uniquePaths = [...new Set(paths)];
+  const tokens = await Promise.all(uniquePaths.map(async (path) => (
+    `${path}\u0000${await statToken(path)}`
+  )));
+  return `${manifestMarker}\n${tokens.join("\n")}`;
+}
+
+export function runtimeInspectionReason({
+  previousStamp = null,
+  currentStamp = null,
+  blockedRetryable = false,
+  blockedRetryAt = 0,
+  lastInspectionAt = 0,
+  fullInspectionMs = defaultFullInspectionMs,
+  now = Date.now(),
+} = {}) {
+  if (previousStamp === null || currentStamp !== previousStamp) return "change";
+  if (blockedRetryable && now >= blockedRetryAt) return "retry";
+  return now - lastInspectionAt >= fullInspectionMs ? "periodic" : null;
+}
+
+export function canPollRuntime({
+  stopping = false,
+  transitioning = false,
+  inspectionInFlight = false,
+} = {}) {
+  return !stopping && !transitioning && !inspectionInFlight;
 }
 
 export function runtimeGeneration(runtime) {
@@ -271,6 +354,7 @@ async function main() {
   const manifestPath = process.env.BROWSERJACK_MANIFEST_PATH || defaultManifest;
   const approvalsFile = process.env.BROWSERJACK_APPROVAL_FILE || defaultApprovalsFile;
   const pollMs = numberEnv("BROWSERJACK_RUNTIME_POLL_MS", defaultPollMs);
+  const fullInspectionMs = durationEnv("BROWSERJACK_RUNTIME_FULL_INSPECTION_MS", defaultFullInspectionMs);
   const baseEnv = { ...process.env };
   const requests = new Map();
   const guidance = bootstrapGuidance(appPath);
@@ -298,6 +382,9 @@ async function main() {
   let childOutputChain = Promise.resolve();
   let poll = null;
   let input = null;
+  let runtimeStamp = null;
+  let inspectionInFlight = false;
+  let lastInspectionAt = 0;
 
   function protocolLog(message) {
     process.stderr.write(`browserjack: ${message}\n`);
@@ -694,23 +781,82 @@ async function main() {
     }
   } catch (error) {
     await setBlocked(`initial signed runtime resolution failed: ${error.message}`, true);
+  } finally {
+    lastInspectionAt = Date.now();
+    runtimeStamp = await runtimeChangeStamp({ appPath, manifestPath });
   }
 
   poll = setInterval(async () => {
-    if (stopping || transitioning || !activeSnapshot) return;
+    if (!canPollRuntime({ stopping, transitioning, inspectionInFlight })) return;
+    inspectionInFlight = true;
+    let performedInspection = false;
     try {
+      const now = Date.now();
+      const currentStamp = await runtimeChangeStamp({ appPath, manifestPath });
+      const reason = runtimeInspectionReason({
+        previousStamp: runtimeStamp,
+        currentStamp,
+        blockedRetryable,
+        blockedRetryAt,
+        lastInspectionAt,
+        fullInspectionMs,
+        now,
+      });
+      if (!reason) {
+        runtimeStamp = currentStamp;
+        return;
+      }
+
+      if (reason === "retry" && activeSnapshot) {
+        performedInspection = true;
+        await revalidate(activeSnapshot);
+        const afterRetryStamp = await runtimeChangeStamp({ appPath, manifestPath });
+        runtimeStamp = afterRetryStamp === currentStamp ? afterRetryStamp : null;
+        return;
+      }
+
+      performedInspection = true;
       const current = await inspectRuntime({ appPath, manifestPath, approvalsFile });
+      const verifiedStamp = await runtimeChangeStamp({ appPath, manifestPath });
+      if (verifiedStamp !== currentStamp) {
+        runtimeStamp = null;
+        await setBlocked("runtime files changed during inspection", true);
+        return;
+      }
+      runtimeStamp = verifiedStamp;
+
+      if (!activeSnapshot) {
+        activeSnapshot = current;
+        if (current.approved) {
+          activeRuntime = await resolveRuntime({ appPath, manifestPath, approvalsFile });
+          blockedReason = null;
+          blockedGeneration = null;
+          blockedRetryable = false;
+          blockedRetryAt = 0;
+          retryAttempt = 0;
+          startChild(activeRuntime);
+        } else {
+          await revalidate(current);
+        }
+        return;
+      }
+
       if (shouldRevalidateRuntime({
         activeSnapshot,
         currentSnapshot: current,
         blockedGeneration,
         blockedRetryable,
         blockedRetryAt,
+        now,
       })) {
         await revalidate(current);
       }
     } catch (error) {
+      performedInspection = true;
       await setBlocked(`runtime inspection failed: ${error.message}`, true);
+    } finally {
+      if (performedInspection) lastInspectionAt = Date.now();
+      inspectionInFlight = false;
     }
   }, pollMs);
   poll.unref();
