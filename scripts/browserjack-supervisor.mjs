@@ -2,7 +2,9 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { join } from "node:path";
+import { watch } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { inspectRuntime, writeApproval } from "./browserjack-fingerprint.mjs";
@@ -19,6 +21,8 @@ const defaultApprovalsFile = join(
   ".config/chatgpt-browser-bridge/browser-runtime-approvals.json",
 );
 const defaultPollMs = 5_000;
+const defaultFullInspectionMs = 300_000;
+const degradedFullInspectionMs = 60_000;
 const maxDiagnosticBytes = 16_384;
 // Cold-starting the verified Node REPL can exceed five seconds after a desktop update.
 // Keep initialization bounded, but allow one normal runtime startup to complete.
@@ -78,6 +82,33 @@ export function initializationError(line, reason) {
 function numberEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isInteger(value) && value >= 1_000 && value <= 60_000 ? value : fallback;
+}
+
+function durationEnv(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value >= 60_000 && value <= 3_600_000 ? value : fallback;
+}
+
+export function runtimeInspectionReason({
+  stopping = false,
+  transitioning = false,
+  inspectionInFlight = false,
+  runtimeDirty = false,
+  blockedRetryable = false,
+  blockedRetryAt = 0,
+  lastInspectionAt = 0,
+  watcherHealthy = true,
+  fullInspectionMs = defaultFullInspectionMs,
+  degradedInspectionMs = degradedFullInspectionMs,
+  now = Date.now(),
+} = {}) {
+  if (stopping || transitioning || inspectionInFlight) return null;
+  if (runtimeDirty) return "change";
+  if (blockedRetryable && now >= blockedRetryAt) return "retry";
+  const interval = watcherHealthy
+    ? fullInspectionMs
+    : Math.min(fullInspectionMs, degradedInspectionMs);
+  return now - lastInspectionAt >= interval ? "periodic" : null;
 }
 
 export function runtimeGeneration(runtime) {
@@ -271,6 +302,7 @@ async function main() {
   const manifestPath = process.env.BROWSERJACK_MANIFEST_PATH || defaultManifest;
   const approvalsFile = process.env.BROWSERJACK_APPROVAL_FILE || defaultApprovalsFile;
   const pollMs = numberEnv("BROWSERJACK_RUNTIME_POLL_MS", defaultPollMs);
+  const fullInspectionMs = durationEnv("BROWSERJACK_RUNTIME_FULL_INSPECTION_MS", defaultFullInspectionMs);
   const baseEnv = { ...process.env };
   const requests = new Map();
   const guidance = bootstrapGuidance(appPath);
@@ -298,9 +330,86 @@ async function main() {
   let childOutputChain = Promise.resolve();
   let poll = null;
   let input = null;
+  let runtimeDirty = false;
+  let inspectionInFlight = false;
+  let lastInspectionAt = 0;
+  let watcherHealthy = true;
+  let runtimeWatchers = [];
 
   function protocolLog(message) {
     process.stderr.write(`browserjack: ${message}\n`);
+  }
+
+  function closeRuntimeWatchers() {
+    for (const watcher of runtimeWatchers) {
+      try {
+        watcher.close();
+      } catch {
+        // The watcher may already be closed after an app replacement.
+      }
+    }
+    runtimeWatchers = [];
+  }
+
+  function addRuntimeWatcher(target, options, filter, label) {
+    try {
+      const watcher = watch(target, options, (_eventType, filename) => {
+        if (filter && filename && !filter(String(filename))) return;
+        runtimeDirty = true;
+      });
+      watcher.on("error", (error) => {
+        watcherHealthy = false;
+        runtimeDirty = true;
+        protocolLog(`runtime watcher error for ${label}: ${error.message}`);
+      });
+      watcher.unref?.();
+      runtimeWatchers.push(watcher);
+      return true;
+    } catch (error) {
+      protocolLog(`runtime watcher unavailable for ${label}: ${error.message}`);
+      return false;
+    }
+  }
+
+  async function refreshRuntimeWatchers() {
+    closeRuntimeWatchers();
+    let healthy = true;
+    const appName = basename(appPath);
+    healthy = addRuntimeWatcher(
+      dirname(appPath),
+      {},
+      (filename) => filename === appName,
+      "ChatGPT.app parent",
+    ) && healthy;
+    healthy = addRuntimeWatcher(appPath, { recursive: true }, null, "ChatGPT.app tree") && healthy;
+
+    const manifestName = basename(manifestPath);
+    healthy = addRuntimeWatcher(
+      dirname(manifestPath),
+      {},
+      (filename) => filename === manifestName,
+      "Chrome native messaging manifest",
+    ) && healthy;
+
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      if (typeof manifest.path !== "string" || manifest.path.length === 0) {
+        healthy = false;
+      } else {
+        const nativeHostName = basename(manifest.path);
+        healthy = addRuntimeWatcher(
+          dirname(manifest.path),
+          {},
+          (filename) => filename === nativeHostName,
+          "installed Chrome native host",
+        ) && healthy;
+      }
+    } catch (error) {
+      healthy = false;
+      protocolLog(`could not watch installed Chrome native host: ${error.message}`);
+    }
+
+    watcherHealthy = healthy;
   }
 
   function clearHandshakeTimer() {
@@ -601,6 +710,7 @@ async function main() {
       clearInterval(poll);
       poll = null;
     }
+    closeRuntimeWatchers();
     clearHandshakeTimer();
     clearPendingTimer();
     handshake = null;
@@ -694,23 +804,70 @@ async function main() {
     }
   } catch (error) {
     await setBlocked(`initial signed runtime resolution failed: ${error.message}`, true);
+  } finally {
+    lastInspectionAt = Date.now();
   }
 
+  if (!stopping) await refreshRuntimeWatchers();
+
   poll = setInterval(async () => {
-    if (stopping || transitioning || !activeSnapshot) return;
+    const now = Date.now();
+    const reason = runtimeInspectionReason({
+      stopping,
+      transitioning,
+      inspectionInFlight,
+      runtimeDirty,
+      blockedRetryable,
+      blockedRetryAt,
+      lastInspectionAt,
+      watcherHealthy,
+      fullInspectionMs,
+      now,
+    });
+    if (!reason) return;
+
+    inspectionInFlight = true;
     try {
+      if (reason === "retry" && activeSnapshot) {
+        await revalidate(activeSnapshot);
+        return;
+      }
+
+      runtimeDirty = false;
       const current = await inspectRuntime({ appPath, manifestPath, approvalsFile });
+      await refreshRuntimeWatchers();
+
+      if (!activeSnapshot) {
+        activeSnapshot = current;
+        if (current.approved) {
+          activeRuntime = await resolveRuntime({ appPath, manifestPath, approvalsFile });
+          blockedReason = null;
+          blockedGeneration = null;
+          blockedRetryable = false;
+          blockedRetryAt = 0;
+          retryAttempt = 0;
+          startChild(activeRuntime);
+        } else {
+          await revalidate(current);
+        }
+        return;
+      }
+
       if (shouldRevalidateRuntime({
         activeSnapshot,
         currentSnapshot: current,
         blockedGeneration,
         blockedRetryable,
         blockedRetryAt,
+        now,
       })) {
         await revalidate(current);
       }
     } catch (error) {
       await setBlocked(`runtime inspection failed: ${error.message}`, true);
+    } finally {
+      lastInspectionAt = Date.now();
+      inspectionInFlight = false;
     }
   }, pollMs);
   poll.unref();
@@ -720,6 +877,7 @@ async function main() {
     if (stopping) return;
     stopping = true;
     clearInterval(poll);
+    closeRuntimeWatchers();
     input.close();
     const child = activeChild;
     activeChild = null;
@@ -770,6 +928,7 @@ async function main() {
   } finally {
     stopping = true;
     clearInterval(poll);
+    closeRuntimeWatchers();
     input.close();
     const child = activeChild;
     activeChild = null;
