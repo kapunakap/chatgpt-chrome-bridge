@@ -2,9 +2,8 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { watch } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { inspectRuntime, writeApproval } from "./browserjack-fingerprint.mjs";
@@ -22,7 +21,6 @@ const defaultApprovalsFile = join(
 );
 const defaultPollMs = 5_000;
 const defaultFullInspectionMs = 300_000;
-const degradedFullInspectionMs = 60_000;
 const maxDiagnosticBytes = 16_384;
 // Cold-starting the verified Node REPL can exceed five seconds after a desktop update.
 // Keep initialization bounded, but allow one normal runtime startup to complete.
@@ -89,26 +87,80 @@ function durationEnv(name, fallback) {
   return Number.isInteger(value) && value >= 60_000 && value <= 3_600_000 ? value : fallback;
 }
 
+async function statToken(path) {
+  try {
+    const details = await stat(path);
+    return [
+      details.dev,
+      details.ino,
+      details.mode,
+      details.size,
+      details.mtimeMs,
+      details.ctimeMs,
+    ].join(":");
+  } catch (error) {
+    return `error:${error?.code ?? error?.name ?? "unknown"}`;
+  }
+}
+
+export async function runtimeChangeStamp({
+  appPath = defaultApp,
+  manifestPath = defaultManifest,
+  arch = process.arch,
+} = {}) {
+  const pluginPath = join(appPath, "Contents/Resources/plugins/openai-bundled/plugins/chrome");
+  const paths = [
+    appPath,
+    join(appPath, "Contents/Info.plist"),
+    join(appPath, "Contents/MacOS/ChatGPT"),
+    join(appPath, "Contents/_CodeSignature/CodeResources"),
+    join(pluginPath, ".codex-plugin/plugin.json"),
+    join(pluginPath, "scripts/extension-ids.json"),
+    join(pluginPath, "scripts/extension-id.json"),
+    join(pluginPath, "scripts/browser-client.mjs"),
+    join(pluginPath, "scripts/browser-service.mjs"),
+    join(pluginPath, "extension-host/macos", arch, "ChatGPT for Chrome"),
+    manifestPath,
+  ];
+  let manifestMarker = "";
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    if (typeof manifest.path === "string" && manifest.path.length > 0) {
+      paths.push(manifest.path);
+    } else {
+      manifestMarker = "manifest-path-missing";
+    }
+  } catch (error) {
+    manifestMarker = `manifest-read:${error?.code ?? error?.name ?? "unknown"}`;
+  }
+
+  const uniquePaths = [...new Set(paths)];
+  const tokens = await Promise.all(uniquePaths.map(async (path) => (
+    `${path}\u0000${await statToken(path)}`
+  )));
+  return `${manifestMarker}\n${tokens.join("\n")}`;
+}
+
 export function runtimeInspectionReason({
-  stopping = false,
-  transitioning = false,
-  inspectionInFlight = false,
-  runtimeDirty = false,
+  previousStamp = null,
+  currentStamp = null,
   blockedRetryable = false,
   blockedRetryAt = 0,
   lastInspectionAt = 0,
-  watcherHealthy = true,
   fullInspectionMs = defaultFullInspectionMs,
-  degradedInspectionMs = degradedFullInspectionMs,
   now = Date.now(),
 } = {}) {
-  if (stopping || transitioning || inspectionInFlight) return null;
-  if (runtimeDirty) return "change";
+  if (previousStamp === null || currentStamp !== previousStamp) return "change";
   if (blockedRetryable && now >= blockedRetryAt) return "retry";
-  const interval = watcherHealthy
-    ? fullInspectionMs
-    : Math.min(fullInspectionMs, degradedInspectionMs);
-  return now - lastInspectionAt >= interval ? "periodic" : null;
+  return now - lastInspectionAt >= fullInspectionMs ? "periodic" : null;
+}
+
+export function canPollRuntime({
+  stopping = false,
+  transitioning = false,
+  inspectionInFlight = false,
+} = {}) {
+  return !stopping && !transitioning && !inspectionInFlight;
 }
 
 export function runtimeGeneration(runtime) {
@@ -330,86 +382,12 @@ async function main() {
   let childOutputChain = Promise.resolve();
   let poll = null;
   let input = null;
-  let runtimeDirty = false;
+  let runtimeStamp = null;
   let inspectionInFlight = false;
   let lastInspectionAt = 0;
-  let watcherHealthy = true;
-  let runtimeWatchers = [];
 
   function protocolLog(message) {
     process.stderr.write(`browserjack: ${message}\n`);
-  }
-
-  function closeRuntimeWatchers() {
-    for (const watcher of runtimeWatchers) {
-      try {
-        watcher.close();
-      } catch {
-        // The watcher may already be closed after an app replacement.
-      }
-    }
-    runtimeWatchers = [];
-  }
-
-  function addRuntimeWatcher(target, options, filter, label) {
-    try {
-      const watcher = watch(target, options, (_eventType, filename) => {
-        if (filter && filename && !filter(String(filename))) return;
-        runtimeDirty = true;
-      });
-      watcher.on("error", (error) => {
-        watcherHealthy = false;
-        runtimeDirty = true;
-        protocolLog(`runtime watcher error for ${label}: ${error.message}`);
-      });
-      watcher.unref?.();
-      runtimeWatchers.push(watcher);
-      return true;
-    } catch (error) {
-      protocolLog(`runtime watcher unavailable for ${label}: ${error.message}`);
-      return false;
-    }
-  }
-
-  async function refreshRuntimeWatchers() {
-    closeRuntimeWatchers();
-    let healthy = true;
-    const appName = basename(appPath);
-    healthy = addRuntimeWatcher(
-      dirname(appPath),
-      {},
-      (filename) => filename === appName,
-      "ChatGPT.app parent",
-    ) && healthy;
-    healthy = addRuntimeWatcher(appPath, { recursive: true }, null, "ChatGPT.app tree") && healthy;
-
-    const manifestName = basename(manifestPath);
-    healthy = addRuntimeWatcher(
-      dirname(manifestPath),
-      {},
-      (filename) => filename === manifestName,
-      "Chrome native messaging manifest",
-    ) && healthy;
-
-    try {
-      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-      if (typeof manifest.path !== "string" || manifest.path.length === 0) {
-        healthy = false;
-      } else {
-        const nativeHostName = basename(manifest.path);
-        healthy = addRuntimeWatcher(
-          dirname(manifest.path),
-          {},
-          (filename) => filename === nativeHostName,
-          "installed Chrome native host",
-        ) && healthy;
-      }
-    } catch (error) {
-      healthy = false;
-      protocolLog(`could not watch installed Chrome native host: ${error.message}`);
-    }
-
-    watcherHealthy = healthy;
   }
 
   function clearHandshakeTimer() {
@@ -710,7 +688,6 @@ async function main() {
       clearInterval(poll);
       poll = null;
     }
-    closeRuntimeWatchers();
     clearHandshakeTimer();
     clearPendingTimer();
     handshake = null;
@@ -806,36 +783,47 @@ async function main() {
     await setBlocked(`initial signed runtime resolution failed: ${error.message}`, true);
   } finally {
     lastInspectionAt = Date.now();
+    runtimeStamp = await runtimeChangeStamp({ appPath, manifestPath });
   }
 
-  if (!stopping) await refreshRuntimeWatchers();
-
   poll = setInterval(async () => {
-    const now = Date.now();
-    const reason = runtimeInspectionReason({
-      stopping,
-      transitioning,
-      inspectionInFlight,
-      runtimeDirty,
-      blockedRetryable,
-      blockedRetryAt,
-      lastInspectionAt,
-      watcherHealthy,
-      fullInspectionMs,
-      now,
-    });
-    if (!reason) return;
-
+    if (!canPollRuntime({ stopping, transitioning, inspectionInFlight })) return;
     inspectionInFlight = true;
+    let performedInspection = false;
     try {
-      if (reason === "retry" && activeSnapshot) {
-        await revalidate(activeSnapshot);
+      const now = Date.now();
+      const currentStamp = await runtimeChangeStamp({ appPath, manifestPath });
+      const reason = runtimeInspectionReason({
+        previousStamp: runtimeStamp,
+        currentStamp,
+        blockedRetryable,
+        blockedRetryAt,
+        lastInspectionAt,
+        fullInspectionMs,
+        now,
+      });
+      if (!reason) {
+        runtimeStamp = currentStamp;
         return;
       }
 
-      runtimeDirty = false;
+      if (reason === "retry" && activeSnapshot) {
+        performedInspection = true;
+        await revalidate(activeSnapshot);
+        const afterRetryStamp = await runtimeChangeStamp({ appPath, manifestPath });
+        runtimeStamp = afterRetryStamp === currentStamp ? afterRetryStamp : null;
+        return;
+      }
+
+      performedInspection = true;
       const current = await inspectRuntime({ appPath, manifestPath, approvalsFile });
-      await refreshRuntimeWatchers();
+      const verifiedStamp = await runtimeChangeStamp({ appPath, manifestPath });
+      if (verifiedStamp !== currentStamp) {
+        runtimeStamp = null;
+        await setBlocked("runtime files changed during inspection", true);
+        return;
+      }
+      runtimeStamp = verifiedStamp;
 
       if (!activeSnapshot) {
         activeSnapshot = current;
@@ -864,9 +852,10 @@ async function main() {
         await revalidate(current);
       }
     } catch (error) {
+      performedInspection = true;
       await setBlocked(`runtime inspection failed: ${error.message}`, true);
     } finally {
-      lastInspectionAt = Date.now();
+      if (performedInspection) lastInspectionAt = Date.now();
       inspectionInFlight = false;
     }
   }, pollMs);
@@ -877,7 +866,6 @@ async function main() {
     if (stopping) return;
     stopping = true;
     clearInterval(poll);
-    closeRuntimeWatchers();
     input.close();
     const child = activeChild;
     activeChild = null;
@@ -928,7 +916,6 @@ async function main() {
   } finally {
     stopping = true;
     clearInterval(poll);
-    closeRuntimeWatchers();
     input.close();
     const child = activeChild;
     activeChild = null;
