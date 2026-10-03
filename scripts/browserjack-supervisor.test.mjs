@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   applySuccessfulRevalidation,
   blockedResponse,
+  canPollRuntime,
   generationChanged,
   isTransientBrowserFailure,
   initializationError,
@@ -11,6 +15,7 @@ import {
   pendingMcpMessageFits,
   replayInitialization,
   retryDelay,
+  runtimeChangeStamp,
   runtimeGeneration,
   runtimeInspectionReason,
   shouldRevalidateRuntime,
@@ -40,39 +45,70 @@ test("unchanged generation stays in the current supervisor process", () => {
 
 test("idle polling skips expensive inspection until a change, retry, or safety interval", () => {
   const base = {
+    previousStamp: "same",
+    currentStamp: "same",
     lastInspectionAt: 10_000,
     fullInspectionMs: 300_000,
-    degradedInspectionMs: 60_000,
     now: 15_000,
   };
   assert.equal(runtimeInspectionReason(base), null);
-  assert.equal(runtimeInspectionReason({ ...base, runtimeDirty: true }), "change");
+  assert.equal(runtimeInspectionReason({ ...base, currentStamp: "changed" }), "change");
+  assert.equal(runtimeInspectionReason({
+    ...base,
+    blockedRetryable: true,
+    blockedRetryAt: 20_000,
+  }), null);
   assert.equal(runtimeInspectionReason({
     ...base,
     blockedRetryable: true,
     blockedRetryAt: 15_000,
   }), "retry");
   assert.equal(runtimeInspectionReason({ ...base, now: 310_000 }), "periodic");
-  assert.equal(runtimeInspectionReason({
-    ...base,
-    watcherHealthy: false,
-    now: 70_000,
-  }), "periodic");
 });
 
 test("slow runtime inspections cannot overlap", () => {
-  assert.equal(runtimeInspectionReason({
-    runtimeDirty: true,
-    inspectionInFlight: true,
-    lastInspectionAt: 0,
-    now: 999_999,
-  }), null);
-  assert.equal(runtimeInspectionReason({
-    runtimeDirty: true,
-    transitioning: true,
-    lastInspectionAt: 0,
-    now: 999_999,
-  }), null);
+  assert.equal(canPollRuntime({ inspectionInFlight: true }), false);
+  assert.equal(canPollRuntime({ transitioning: true }), false);
+  assert.equal(canPollRuntime({ stopping: true }), false);
+  assert.equal(canPollRuntime({}), true);
+});
+
+test("runtime change stamp notices critical runtime file changes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "browserjack-supervisor-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const appPath = join(root, "ChatGPT.app");
+  const pluginPath = join(appPath, "Contents/Resources/plugins/openai-bundled/plugins/chrome");
+  const bundledHostDir = join(pluginPath, "extension-host/macos", process.arch);
+  await mkdir(join(appPath, "Contents/MacOS"), { recursive: true });
+  await mkdir(join(appPath, "Contents/_CodeSignature"), { recursive: true });
+  await mkdir(join(pluginPath, ".codex-plugin"), { recursive: true });
+  await mkdir(join(pluginPath, "scripts"), { recursive: true });
+  await mkdir(bundledHostDir, { recursive: true });
+
+  const files = [
+    [join(appPath, "Contents/Info.plist"), "plist"],
+    [join(appPath, "Contents/MacOS/ChatGPT"), "app"],
+    [join(appPath, "Contents/_CodeSignature/CodeResources"), "signature"],
+    [join(pluginPath, ".codex-plugin/plugin.json"), "{}"],
+    [join(pluginPath, "scripts/extension-ids.json"), "{}"],
+    [join(pluginPath, "scripts/browser-client.mjs"), "client"],
+    [join(pluginPath, "scripts/browser-service.mjs"), "service"],
+    [join(bundledHostDir, "ChatGPT for Chrome"), "bundled-host"],
+  ];
+  for (const [path, content] of files) await writeFile(path, content);
+
+  const nativeHostPath = join(root, "installed-native-host");
+  const manifestPath = join(root, "manifest.json");
+  await writeFile(nativeHostPath, "installed-host");
+  await writeFile(manifestPath, JSON.stringify({ path: nativeHostPath }));
+
+  const before = await runtimeChangeStamp({ appPath, manifestPath });
+  const unchanged = await runtimeChangeStamp({ appPath, manifestPath });
+  assert.equal(unchanged, before);
+
+  await writeFile(join(pluginPath, "scripts/browser-client.mjs"), "client-changed-content");
+  const after = await runtimeChangeStamp({ appPath, manifestPath });
+  assert.notEqual(after, before);
 });
 
 test("compatible generation change requests an outer restart without replacement or replay", async () => {
