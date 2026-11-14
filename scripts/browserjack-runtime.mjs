@@ -162,6 +162,22 @@ async function readManifest(manifestPath) {
   return value;
 }
 
+export function selectRuntimeRegistration(registry, expected) {
+  if (!isObject(registry) || registry.schemaVersion !== 2 || !Array.isArray(registry.entries)) {
+    throw new Error("Chrome native-host v2 registry must use schemaVersion 2");
+  }
+  for (const entry of registry.entries) {
+    if (!isObject(entry) || entry.schemaVersion !== 2 ||
+        typeof entry.appVersion !== "string" || entry.appVersion.trim() === "") {
+      throw new Error("Invalid Chrome native-host v2 registry entry");
+    }
+  }
+  // Never use executable paths from a historical app registration. Current
+  // registrations remain authoritative and must pass all v2 checks.
+  if (!registry.entries.some((entry) => entry.appVersion === expected.appVersion)) return null;
+  return selectV2RuntimeEntry(registry, expected);
+}
+
 async function resolveV2({ registryPath, snapshot, manifest, appPluginPath, appCodexPath, appResourcesRoot }) {
   let registry;
   try {
@@ -171,11 +187,12 @@ async function resolveV2({ registryPath, snapshot, manifest, appPluginPath, appC
     throw new Error(`Could not read Chrome native-host v2 registry ${registryPath}: ${error.message}`, { cause: error });
   }
 
-  const entry = selectV2RuntimeEntry(registry, {
+  const entry = selectRuntimeRegistration(registry, {
     appVersion: snapshot.appVersion,
     nativeHostName: snapshot.nativeHostName,
     extensionIds: snapshot.extensionIds,
   });
+  if (entry === null) return null;
   const paths = entry.paths;
   if (!isObject(paths)) throw new Error("Current v2 registry entry has no paths object");
 
@@ -297,6 +314,12 @@ export async function resolveRuntime({
   const appResourcesRoot = await existingRealpath(join(appPath, "Contents/Resources"), "ChatGPT resources");
   const appCodexPath = await resolveSignedCodexPath(appResourcesRoot);
   const manifest = await readManifest(manifestPath);
+  for (const id of snapshot.extensionIds) {
+    if (!Array.isArray(manifest.allowed_origins) ||
+        !manifest.allowed_origins.includes(`chrome-extension://${id}/`)) {
+      throw new Error(`native-host manifest does not allow signed extension ${id}`);
+    }
+  }
   const v2 = await resolveV2({
     registryPath,
     snapshot,
@@ -333,8 +356,16 @@ export async function resolveRuntime({
     extensionId: snapshot.extensionId,
     pluginRoots: [appPluginPath],
   };
+  contained(appResourcesRoot, appPluginPath, "ChatGPT Chrome plugin");
+  if (!v2) {
+    for (const path of [base.nodePath, base.nodeReplPath, ...base.nodeModuleDirs,
+      base.browserClientPath, base.browserServicePath]) {
+      contained(appResourcesRoot, path, "signed app runtime component");
+    }
+  }
   return {
     ...base,
+    runtimeSource: v2 ? "v2-registry" : "signed-app",
     appPath: resolve(appPath),
     appVersion: snapshot.appVersion,
     buildVersion: snapshot.buildVersion,

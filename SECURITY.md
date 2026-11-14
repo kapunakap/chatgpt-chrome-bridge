@@ -44,6 +44,10 @@ The prepared BrowserJack checkout retains BrowserJack's cache/browser-client int
 
 Any unknown hash or identity mismatch must fail closed until the signed candidate has passed its allowed compatibility test; identity mismatches remain blocked. Do not solve compatibility failures by globally disabling signature, identity, fingerprint, or self-test checks.
 
+Historical v2 catalogue entries are not executable-path authority for a newer signed app. When there is no entry for the current app, direct app resolution uses only contained, signed-bundle runtime components and the already verified installed native host. Malformed catalogues and invalid or ambiguous current entries remain blocked. No registration is manufactured or edited.
+
+Service diagnostics use the existing LaunchAgent environment through a temporary one-shot launchd job. They do not forward Codex chat-scoped executor settings, mint an access identity, rewrite turn metadata to borrow a chat's access, or disable native pipe authorization. These checks run as independent service processes, under the same trust checks as the serving tunnel. Raw status output stays in a private temporary directory and is removed after the bounded check; only fixed readiness fields are printed.
+
 ## Network boundary
 
 `tunnel-client` uses outbound HTTPS to OpenAI; this repository does not require a public inbound listener, reverse proxy, or firewall hole. The MCP server itself is launched locally by the managed tunnel runtime over stdio.

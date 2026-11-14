@@ -7,7 +7,7 @@ import {
   parseLegacyExtensionMetadata,
   parsePluralExtensionMetadata,
 } from "./browserjack-fingerprint.mjs";
-import { resolveSignedCodexPath, selectV2RuntimeEntry } from "./browserjack-runtime.mjs";
+import { resolveSignedCodexPath, selectRuntimeRegistration, selectV2RuntimeEntry } from "./browserjack-runtime.mjs";
 
 const chromeId = "hehggadaopoacecdllhhajmbjkdcmajg";
 const edgeId = "odlomjlbamekndcpllcnffbgeohgkmjh";
@@ -142,4 +142,42 @@ test("v2 entries expose the paths needed by trusted browser RPC", () => {
   });
   assert.equal(selected.paths.browserServicePath.endsWith("browser-service.mjs"), true);
   assert.equal(selected.paths.nodeReplPath.endsWith("node_repl"), true);
+});
+
+const registrationIdentity = {
+  appVersion: "26.1111.21308", nativeHostName: "com.openai.codexextension",
+  extensionIds: [chromeId, edgeId],
+};
+const registration = {
+  schemaVersion: 2, appVersion: registrationIdentity.appVersion, channel: "prod",
+  appServerProtocolVersion: 2, nativeHostProtocolVersion: 2,
+  extensionBuildChannels: ["prod"], nativeHostNames: [registrationIdentity.nativeHostName],
+  extensionIds: registrationIdentity.extensionIds, paths: {},
+};
+
+test("historical registrations cannot supply paths for a newer signed app", () => {
+  const stale = { ...registration, appVersion: "26.1106.51428",
+    paths: { codexCliPath: "/obsolete/runtime" } };
+  assert.equal(selectRuntimeRegistration({ schemaVersion: 2, entries: [stale] }, registrationIdentity), null);
+  assert.equal(selectRuntimeRegistration({ schemaVersion: 2, entries: [stale, registration] }, registrationIdentity), registration);
+});
+
+test("current invalid or ambiguous registrations still fail closed", () => {
+  for (const entries of [
+    [{ ...registration, nativeHostProtocolVersion: 1 }],
+    [{ ...registration, nativeHostNames: ["untrusted.host"] }],
+    [{ ...registration, extensionIds: ["untrusted"] }],
+    [{ ...registration, channel: "dev" }],
+    [registration, registration],
+  ]) {
+    assert.throws(() => selectRuntimeRegistration({ schemaVersion: 2, entries }, registrationIdentity), /Expected one current/);
+  }
+});
+
+test("malformed catalogues cannot select the signed-app layout", () => {
+  for (const registry of [null, { schemaVersion: 1, entries: [] },
+    { schemaVersion: 2, entries: [null] },
+    { schemaVersion: 2, entries: [{ schemaVersion: 2 }] }]) {
+    assert.throws(() => selectRuntimeRegistration(registry, registrationIdentity), /registry/);
+  }
 });

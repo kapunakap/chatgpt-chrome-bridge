@@ -23,6 +23,8 @@ ChatGPT
 
 The bridge is deliberately fail-closed to an exact browser-runtime fingerprint rather than a marketing app version. The signed plugin metadata is feature-detected from either `extension-ids.json` or the legacy `extension-id.json`; the Chrome store ID is selected from the signed Chrome entry, never from the first native-host origin.
 
+The desktop's v2 runtime catalogue can contain only historical app registrations after an update. The bridge never uses those older executable paths. It resolves the current signed app directly in that case, with the same signature, fingerprint, native-host byte-identity, extension-origin, and containment checks. A registration for the current app remains authoritative: invalid identities, protocols, or duplicate current entries still fail closed. The bridge does not rewrite OpenAI's registries or Chrome's registration.
+
 When signed browser content is unchanged, a new app version/build is tested once by the local BrowserJack runtime and cached as an exact per-build result. A changed browser fingerprint is admitted only through a real live self-test; the exact fingerprint is written to the private local approval file only after that test succeeds. Identity, signature, byte-identity, and containment mismatches always fail closed.
 
 The Local Chrome supervisor watches the signed app generation. After a compatible update, it revalidates the new generation and exits instead of swapping BrowserJack under the existing process-affine stdio connection. `tunnel-client` then shuts down, and the launchd `KeepAlive` service starts a fresh tunnel-client process, supervisor, BrowserJack child, and MCP session. An unapproved or incompatible generation remains fail-closed in the existing supervisor with explicit unavailable errors, without repeatedly exiting into a launchd restart loop.
@@ -181,6 +183,16 @@ Validate the local BrowserJack handshake and managed runtime:
 ```bash
 bash scripts/status.sh
 ```
+
+When checking a launchd-managed Local Chrome service from inside Codex, use:
+
+```bash
+bash scripts/service-check.sh doctor
+bash scripts/service-check.sh smoke
+bash scripts/service-check.sh status
+```
+
+These run the same checks as temporary, one-shot launchd jobs with the existing service's environment. Codex shells can inherit chat-scoped browser-access settings; passing those into a standalone diagnostic produces a misleading `native pipe closed before response` (`untrusted-process-ancestry`) error. The service check does not copy or replay those settings, disable peer authorization, or change the main service configuration. It prints only check/readiness fields and removes its private temporary output and job afterward. `status` still requires an initialized hosted ChatGPT session for full readiness.
 
 This also fails closed unless tunnel-client is exactly `0.0.14` and reports the initialized-notification compatibility mode enabled.
 
