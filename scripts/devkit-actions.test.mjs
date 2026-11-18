@@ -38,7 +38,7 @@ async function fixture(check) {
 test("socket is private, reports only allowed operations and does not forward caller JavaScript", async () => {
   await fixture(async ({ call, path }) => {
     assert.equal((await lstat(path)).mode & 0o077, 0);
-    const result = await call({ op: "tabs_list" });
+    const result = await call({ op: "tabs_list", origins: ["https://example.com"] });
     assert.deepEqual(result, { tabs: [{ id: "a1", origin: "https://example.com", title: "Example" }] });
     assert.deepEqual(await call({ op: "js", code: "process.exit(1)" }), { error: "INVALID_REQUEST" });
     assert.deepEqual(await call({ op: "navigate", requestId: "test", url: "file:///etc/passwd" }), { error: "URL_NOT_ALLOWED" });
