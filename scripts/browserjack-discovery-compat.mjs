@@ -18,6 +18,7 @@ import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Transform } from "node:stream";
+import { createDevKitActionServer } from "./devkit-actions.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const upstream = process.env.BROWSERJACK_DISCOVERY_UPSTREAM
@@ -27,6 +28,7 @@ const healthSocketPath = process.env.BROWSERJACK_HEALTH_SOCKET ?? join(
   ".config/chatgpt-browser-bridge/browserjack-live-health.sock",
 );
 const browserClientUrl = "file:///Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/chrome/scripts/browser-client.mjs";
+const devkitSocketPath = join(homedir(), ".config/chatgpt-browser-bridge/devkit-actions.sock");
 const maxHealthRequestBytes = 64;
 const healthProbeTimeoutMs = 30_000;
 const healthIdPrefix = `__chatgpt_chrome_bridge_health__:${process.pid}:`;
@@ -412,6 +414,7 @@ async function runProxy(args) {
     if (isResponse) {
       const waiter = pending.get(message.id);
       pending.delete(message.id);
+      reservedIds.delete(message.id);
       waiter?.resolve(message);
       return;
     }
@@ -426,6 +429,39 @@ async function runProxy(args) {
     child.kill("SIGTERM");
     throw error;
   }
+  let actions;
+  if (process.env.BROWSERJACK_DEVKIT_ACTIONS_ENABLED === "true") {
+    try {
+      actions = await createDevKitActionServer({
+        socketPath: devkitSocketPath,
+        invoke: request => new Promise((resolveAction, rejectAction) => {
+          const id = request.id;
+          reservedIds.add(id);
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            reservedIds.delete(id);
+            rejectAction(new Error("Browser action timed out"));
+          }, 6_000);
+          pending.set(id, {
+            resolve: message => { clearTimeout(timer); resolveAction(message); },
+            reject: error => { clearTimeout(timer); rejectAction(error); },
+          });
+          child.stdin.write(JSON.stringify(request) + "\n", error => {
+            if (!error) return;
+            clearTimeout(timer);
+            pending.delete(id);
+            reservedIds.delete(id);
+            rejectAction(error);
+          });
+        }),
+      });
+    } catch (error) {
+      await new Promise(resolve => health.server.close(resolve));
+      removeOwnedSocket(health.identity);
+      child.kill("SIGTERM");
+      throw error;
+    }
+  }
   process.once("exit", () => removeOwnedSocket(health.identity));
   const result = await childDone;
   for (const waiter of pending.values()) {
@@ -433,6 +469,7 @@ async function runProxy(args) {
   }
   pending.clear();
   reservedIds.clear();
+  await actions?.close();
   await new Promise((resolveClose) => health.server.close(resolveClose));
   removeOwnedSocket(health.identity);
   if (result.error) {
