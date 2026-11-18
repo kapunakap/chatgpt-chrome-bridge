@@ -30,7 +30,11 @@ function assertOrigin(value) {
 export function validateDevKitAction(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("INVALID_REQUEST");
   const keys = Object.keys(value).sort();
-  if (value.op === "tabs_list" && keys.join(",") === "op") return { op: "tabs_list" };
+  if (value.op === "tabs_list" && keys.join(",") === "op,origins" &&
+      Array.isArray(value.origins) && value.origins.length > 0 && value.origins.length <= 10 &&
+      value.origins.every(origin => typeof origin === "string" && origin === publicOrigin(origin))) {
+    return { op: "tabs_list", origins: [...new Set(value.origins)] };
+  }
   if (value.op === "read" && keys.join(",") === "op,origin,tabId"
       && typeof value.tabId === "string" && TAB_ID.test(value.tabId)) {
     return { op: "read", tabId: value.tabId, origin: assertOrigin(value.origin) };
@@ -62,7 +66,7 @@ await (async () => {
   let result;
   if (request.op === "tabs_list") {
     const tabs = await chrome.tabs.list();
-    result = { tabs: tabs.slice(0, 100).map(tab => ({
+    result = { tabs: tabs.filter(tab => request.origins.includes(origin(tab.url))).slice(0, 20).map(tab => ({
       id: String(tab.id).slice(0, 128), origin: origin(tab.url),
       title: String(tab.title ?? "").slice(0, 200),
     })) };
@@ -100,7 +104,7 @@ export function browserActionResult(message, op) {
   }
   if (!data || typeof data !== "object") throw Error("INVALID_BROWSER_RESULT");
   if (op === "tabs_list") {
-    if (!Array.isArray(data.tabs) || data.tabs.length > 100) throw Error("INVALID_BROWSER_RESULT");
+    if (!Array.isArray(data.tabs) || data.tabs.length > 20) throw Error("INVALID_BROWSER_RESULT");
     return { tabs: data.tabs.filter(tab =>
       tab && typeof tab.id === "string" && TAB_ID.test(tab.id) &&
       typeof tab.origin === "string" && typeof tab.title === "string"
