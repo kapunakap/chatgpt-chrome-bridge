@@ -10,7 +10,7 @@ const repo = "kapunakap/chatgpt-chrome-bridge";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const full = process.argv.includes("--full");
 const report = process.argv.includes("--report");
-if (process.argv.some(arg => !["--full", "--report"].includes(arg))) throw Error("Only --full and --report are supported");
+if (process.argv.slice(2).some(arg => !["--full", "--report"].includes(arg))) throw Error("Only --full and --report are supported");
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const sha = git("rev-parse", "HEAD");
 if (!/^[a-f0-9]{40}$/.test(sha) || git("status", "--porcelain")) throw Error("LOCAL_CI_REQUIRES_CLEAN_EXACT_COMMIT");
