@@ -3,6 +3,7 @@ set -euo pipefail
 
 ACTION="${1:-status}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$REPO_ROOT/scripts/node-runtime.sh"
 ALIAS="${TUNNEL_ALIAS:-local-chrome}"
 LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
 HEALTH_LABEL="${LOCAL_CHROME_HEALTH_LAUNCH_AGENT_LABEL:-$LABEL.health}"
@@ -53,6 +54,11 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required."
 }
 
+select_service_node() {
+  select_node_runtime "$SERVICE_PATH" || fail "No working Node.js 22+ executable is available."
+  export LOCAL_CHROME_SERVICE_PATH="$SERVICE_PATH"
+}
+
 validate_private_file() {
   local path="$1"
   local label="$2"
@@ -67,7 +73,7 @@ validate_inputs() {
   require_command launchctl
   require_command plutil
   require_command python3
-  require_command node
+  select_service_node
   require_command tunnel-client
   [[ -x "$BROWSERJACK_SHIM" ]] || fail "BrowserJack launcher not found or not executable: $BROWSERJACK_SHIM"
   [[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
@@ -123,7 +129,7 @@ launchd_process_alive() {
 }
 
 browser_probe() {
-  node "$HEALTH_PROBE" probe
+  "$NODE_BIN" "$HEALTH_PROBE" probe
 }
 
 wait_for_runtime_stop() {
@@ -374,7 +380,7 @@ service_status() {
   require_macos
   require_command launchctl
   require_command tunnel-client
-  require_command node
+  select_service_node
   printf 'launch_agent_label=%s\n' "$LABEL"
   if [[ -f "$PLIST_PATH" ]]; then
     printf 'launch_agent_installed=true\n'
