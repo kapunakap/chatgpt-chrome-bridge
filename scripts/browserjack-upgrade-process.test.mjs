@@ -291,6 +291,9 @@ test("compatible generation replacement uses a fresh supervisor and BrowserJack 
     snapshot: nextSnapshot,
     runtime: { ...nextSnapshot, codexHome: info.root },
   });
+  // The watcher monitors signed-runtime/host filesystem stamps, not the fake
+  // in-memory catalogue. Simulate the host registration changing as an app update does.
+  await writeFile(join(info.root, "manifest.json"), "{}\n");
   await waitFor(() => readFile(info.doctorMarker, "utf8").then(() => true, () => false));
 
   send(first.child, { jsonrpc: "2.0", id: 100, method: "tools/call", params: { name: "js", arguments: { code: "must be blocked" } } });

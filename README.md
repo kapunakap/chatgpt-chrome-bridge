@@ -275,3 +275,43 @@ The runtime API key stays in a local file and is passed to `tunnel-client` by fi
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Experimental DevKit action socket (opt-in, not a public release)
+
+DevKit can optionally reuse this bridge's **already running BrowserJack MCP session**. It never
+starts a second BrowserJack process. A separate private Unix socket provides only three
+strictly typed operations: `tabs_list`, `read`, and `navigate` (new tab only).
+There is **no** generic JS, CDP, shell, cookie, password, or raw MCP operation endpoint.
+
+This integration is disabled by default. To allow the socket when installing the
+per-user LaunchAgent, explicitly run from this checkout:
+
+```sh
+BROWSERJACK_DEVKIT_ACTIONS_ENABLED=true bash scripts/service.sh install
+```
+
+The installed plist remembers the opt-in. `bash scripts/service.sh restart` then reuses it.
+To disable it, reinstall the service without the flag and confirm
+`~/.config/chatgpt-browser-bridge/devkit-actions.sock` is gone. This operation
+is NOT required for normal Local Chrome use.
+
+DevKit's own Mac agent requires a separate local flag and **per-origin grants**:
+
+```sh
+DEVKIT_LOCAL_CHROME_ENABLED=true devkit run
+devkit chrome allow https://example.com read
+devkit chrome allow https://example.com navigate
+devkit chrome grants
+devkit chrome revoke https://example.com
+```
+
+Grants live only in the running DevKit Agent, expire after 15 minutes, and are cleared
+on disconnect or restart. `read` allows listing tabs on that origin and reading
+a bounded page snapshot from a selected matching tab. `navigate` opens a new tab,
+never changes an existing tab, and never automatically submits forms. URLs must
+use public HTTPS and cannot contain credentials, query parameters, or fragments.
+
+**Release gate:** this is a private technical prototype requiring review of the exact
+browser control surface, threat model and signed runtime compatibility before public
+DevKit distribution. The public DevKit Code app and normal bridge remain independent
+and unchanged. See the DevKit repository issue #23.

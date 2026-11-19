@@ -200,7 +200,8 @@ render_plist() {
     "$SERVICE_PATH" \
     "$STDOUT_LOG" \
     "$STDERR_LOG" \
-    "${CHATGPT_APP_PATH:-}" <<'PY'
+    "${CHATGPT_APP_PATH:-}" \
+    "${BROWSERJACK_DEVKIT_ACTIONS_ENABLED:-false}" <<'PY'
 import plistlib
 import sys
 
@@ -215,6 +216,7 @@ import sys
     stdout_log,
     stderr_log,
     chatgpt_app_path,
+    devkit_actions_enabled,
 ) = sys.argv[1:]
 
 environment = {
@@ -224,6 +226,8 @@ environment = {
 }
 if chatgpt_app_path:
     environment["CHATGPT_APP_PATH"] = chatgpt_app_path
+if devkit_actions_enabled == "true":
+    environment["BROWSERJACK_DEVKIT_ACTIONS_ENABLED"] = "true"
 
 value = {
     "Label": label,

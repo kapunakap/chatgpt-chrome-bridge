@@ -59,3 +59,11 @@ The running discovery wrapper exposes one current-user Unix socket for its fixed
 Prefer GitHub's private vulnerability reporting / Security Advisory flow for this repository. Do not include live credentials, cookies, browser profiles, or other secrets in a public issue.
 
 For ordinary non-sensitive bugs, open a normal GitHub issue with the smallest reproducible diagnostic output and redact usernames or other machine-specific paths when they are not relevant.
+
+## Experimental DevKit action socket
+
+The separately opt-in `BROWSERJACK_DEVKIT_ACTIONS_ENABLED=true` LaunchAgent setting creates a **second**, private Unix socket in the same current-user directory, `devkit-actions.sock`. This socket shares the already-serving BrowserJack child and never launches a second browser profile or runtime. It validates socket ownership/modes, rejects arbitrary JavaScript, MCP payloads, localhost/intranet URLs, credentials, query strings, fragments, and unrecognized operations. The only requests are bounded `tabs_list`, `read` (one specified tab + verified origin), and `navigate` (new tab only). Native BrowserJack grants and verified signed runtime checks remain in force.
+
+The socket is accessible to *other processes owned by the same macOS user*. It is **not** a replacement for local OS user isolation. DevKit applies a second security boundary before forwarding requests: a signed-in, device-scoped outbound agent, an explicit local user command granting a named HTTPS origin and access mode, a 15-minute in-memory lease cleared on reconnect, per-tab origin checks before and after reads, and filtering of all ungranted tabs before any response reaches DevKit Cloud. The bridge alone does not store DevKit account IDs or approvals and must not be advertised as a multi-user auth boundary.
+
+Navigation responses are cached by request ID during one bridge process lifetime only. A lost response across a bridge restart is ambiguous and **must not** be retried automatically. The page snapshot is untrusted content; neither browser content nor prompts may escalate a local grant. Avoid sending credentials or private URLs to the bridge, ChatGPT, logs, or issues. This capability is **not approved for public DevKit distribution** solely because its local tests pass.
