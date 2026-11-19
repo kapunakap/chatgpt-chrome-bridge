@@ -133,6 +133,8 @@ Use `bash scripts/service.sh status` or `bash scripts/status.sh` after the hoste
 
 The service runs the checked-in `tunnel-client-current.sh` launcher. It requires tunnel-client `0.0.14` and enables `MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true`, the upstream opt-in that completes a hosted stdio initialization when ChatGPT omits `notifications/initialized` and suppresses a later duplicate.
 
+The installer runs the selected `node` to verify it starts and is version 22 or newer. If the Node on `PATH` is broken, it checks installed Homebrew `node@24` and `node@22` executables, then pins the working Node directory in both launchd jobs. If none work, repair Node or install `node@24`/`node@22` before reinstalling. A valid `LOCAL_CHROME_SERVICE_PATH` override remains preferred.
+
 Do not run `connect-tunnel.sh` after persistence is installed. launchd must be the only owner of the tunnel process; use the service commands below instead. If you used a custom `TUNNEL_ALIAS`, `TUNNEL_CLIENT_PROFILE_DIR`, or `CONTROL_PLANE_RUNTIME_API_KEY_FILE`, pass the same override when installing or operating the service.
 
 This is a per-user service. Local Chrome is unavailable while the Mac is powered off, logged out, asleep without network access, or unable to reach OpenAI over outbound HTTPS.

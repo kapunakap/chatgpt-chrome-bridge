@@ -97,6 +97,11 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"${FAKE_NODE_ARGS_LOG:?}"
 
+if [[ "${1:-}" == "-p" ]]; then
+  printf '24.22.3\n'
+  exit 0
+fi
+
 if [[ "${2:-}" == "probe" ]]; then
   if [[ "${FAKE_BROWSER_PROBE_SUCCESS:-true}" == "true" ]]; then
     printf '{"ok":true,"chromeDiscovered":true,"userBindingUsable":true,"tabsApiUsable":true}\n'

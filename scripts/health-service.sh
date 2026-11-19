@@ -3,6 +3,7 @@ set -euo pipefail
 
 ACTION="${1:-status}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$REPO_ROOT/scripts/node-runtime.sh"
 MAIN_LABEL="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
 LABEL="${LOCAL_CHROME_HEALTH_LAUNCH_AGENT_LABEL:-$MAIN_LABEL.health}"
 LAUNCH_AGENT_DIR="${LOCAL_CHROME_LAUNCH_AGENT_DIR:-$HOME/Library/LaunchAgents}"
@@ -18,6 +19,11 @@ HEALTH_SCRIPT="$REPO_ROOT/scripts/browserjack-health.mjs"
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+select_service_node() {
+  select_node_runtime "$SERVICE_PATH" || fail "No working Node.js 22+ executable is available."
+  export LOCAL_CHROME_SERVICE_PATH="$SERVICE_PATH"
 }
 
 require_macos() {
@@ -97,9 +103,9 @@ install_service() {
   require_command launchctl
   require_command plutil
   require_command python3
-  require_command node
+  select_service_node
   [[ -f "$HEALTH_SCRIPT" ]] || fail "Health watcher not found: $HEALTH_SCRIPT"
-  node_bin="$(command -v node)"
+  node_bin="$NODE_BIN"
 
   mkdir -p "$LAUNCH_AGENT_DIR" "$LOG_DIR"
   chmod 700 "$LOG_DIR"
