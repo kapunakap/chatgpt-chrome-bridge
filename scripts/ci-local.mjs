@@ -31,9 +31,9 @@ checks.push(["public-defaults-policy", "bash", ["-lc", [
   "grep -Fq '" + prepared + "' scripts/browserjack-current.sh",
   "grep -Fq '" + prepared + "' scripts/prepare-browserjack.sh",
   "grep -Fq '" + prepared + "' scripts/review-browserjack-update.sh",
-  "! git grep -n -F 'Library/Application Support/chatgpt-browser-bridge/browserjack' -- scripts README.md SECURITY.md",
-  "! git grep -n -F 'Library/Application Support/browserjack/verified-builds.json' -- scripts README.md SECURITY.md",
-  "! git grep -n '/Users/' -- scripts README.md SECURITY.md",
+  "! git grep -n -F 'Library/Application Support/chatgpt-browser-bridge/browserjack' -- scripts README.md SECURITY.md ':!scripts/ci-local.mjs'",
+  "! git grep -n -F 'Library/Application Support/browserjack/verified-builds.json' -- scripts README.md SECURITY.md ':!scripts/ci-local.mjs'",
+  "! git grep -n '/Users/' -- scripts README.md SECURITY.md ':!scripts/ci-local.mjs'",
   "! git grep -nE 'tunnel_[a-z0-9]{32}'",
 ].join(" && ")], 10_000]);
 if (full) checks.push(["browserjack-upgrade-process", "node", ["--test", "scripts/browserjack-upgrade-process.test.mjs"], 90_000]);
