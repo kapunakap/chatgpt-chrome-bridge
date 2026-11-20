@@ -34,8 +34,8 @@ if (args[0] === "run") {
     try { message = JSON.parse(line); } catch {}
     if (
       message?.method === "tools/call"
-      && typeof message.id === "string"
-      && message.id.startsWith("__chatgpt_chrome_bridge_health__:")
+      && typeof message.id === "number"
+      && message.id >= 100_000_000
     ) {
       appendFileSync(process.env.FAKE_BROWSERJACK_LOG, JSON.stringify(message) + "\\n");
       const response = process.env.FAKE_HEALTH_FAILURE === "user-unavailable"
@@ -317,12 +317,13 @@ test("serves only the fixed probe through the existing private BrowserJack sessi
   assert.equal(injected.method, "tools/call");
   assert.equal(injected.params.name, "js");
   assert.equal(Object.hasOwn(injected.params, "_meta"), false);
-  assert.match(injected.id, /^__chatgpt_chrome_bridge_health__:/u);
+  assert.equal(typeof injected.id, "number");
+  assert(injected.id >= 100_000_000);
   assert.match(injected.params.arguments.code, /\/Applications\/ChatGPT\.app\/Contents\/Resources\/plugins\/openai-bundled\/plugins\/chrome\/scripts\/browser-client\.mjs/u);
   assert.match(injected.params.arguments.code, /setupBrowserRuntime\(\)/u);
   assert.match(injected.params.arguments.code, /nameSession\('chatgpt-chrome-bridge-health'\)/u);
   assert.match(injected.params.arguments.code, /tabs\.list\(\)/u);
-  assert(!proxy.output().stdout.includes("__chatgpt_chrome_bridge_health__"));
+  assert(!proxy.output().stdout.includes(`"id":${injected.id}`));
 
   proxy.child.stdin.end();
   const result = await proxy.exited;
@@ -344,7 +345,8 @@ test("health probe delegates metadata to the stable serving child and reuses its
 
   assert.equal(Object.hasOwn(injected.params, "_meta"), false);
   assert.doesNotMatch(serialized, /x-codex-turn-metadata|installation_id|session_id|thread_id/u);
-  assert.match(injected.id, /^__chatgpt_chrome_bridge_health__:/u);
+  assert.equal(typeof injected.id, "number");
+  assert(injected.id >= 100_000_000);
   assert.match(code, /await \(async \(\) => \{/u);
   assert.match(code, /let healthAgent = globalThis\.agent;/u);
   assert.match(code, /if \(typeof healthAgent\?\.browsers\?\.list !== 'function'\) \{/u);
