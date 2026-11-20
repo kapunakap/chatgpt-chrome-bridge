@@ -35,7 +35,7 @@ if (args[0] === "run") {
     if (
       message?.method === "tools/call"
       && typeof message.id === "number"
-       && message.id >= 100_000_000
+      && message.id >= 100_000_000
     ) {
       appendFileSync(process.env.FAKE_BROWSERJACK_LOG, JSON.stringify(message) + "\\n");
       const response = process.env.FAKE_HEALTH_FAILURE === "user-unavailable"
