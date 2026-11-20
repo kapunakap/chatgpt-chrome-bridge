@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { randomUUID, randomInt } from "node:crypto";
+import { randomInt } from "node:crypto";
 import {
   chmod,
   lstat,
