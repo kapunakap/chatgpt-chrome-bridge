@@ -285,6 +285,21 @@ starts a second BrowserJack process. A separate private Unix socket provides onl
 strictly typed operations: `tabs_list`, `read`, and `navigate` (new tab only).
 There is **no** generic JS, CDP, shell, cookie, password, or raw MCP operation endpoint.
 
+This socket is not a standalone DevKit browser service. A cold service still needs
+the normal hosted MCP initialization described above. The bridge does not inject an
+initialization into an existing hosted session or borrow that session's metadata.
+
+Actions use a 3.5-second total deadline, including queue time. Queued work is dropped
+when its client disconnects or the deadline passes. A navigation already sent to
+Chrome can finish after its caller times out; that result is reported as unknown,
+and the same request ID never starts navigation again. The bridge retains at most
+100 navigation request IDs per process and rejects further new IDs rather than
+evicting an uncertain write. Late internal responses stay on the private route.
+
+Tab listing uses fresh user-tab observations and filters them locally to granted
+origins. A read claims only the exact selected, matching user tab. The browser
+binding stays fixed; an ambiguous browser choice fails until the user resolves it.
+
 This integration is disabled by default. To allow the socket when installing the
 per-user LaunchAgent, explicitly run from this checkout:
 

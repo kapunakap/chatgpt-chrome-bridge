@@ -19,6 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Transform } from "node:stream";
 import { createDevKitActionServer } from "./devkit-actions.mjs";
+import { consumeInternalResponse, invokeInternalRequest } from "./browserjack-internal-rpc.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const upstream = process.env.BROWSERJACK_DISCOVERY_UPSTREAM
@@ -410,19 +411,7 @@ async function runProxy(args) {
 
   const output = new LineTransform((record, delimiter, stream) => {
     const message = parseRecord(record);
-    const isObject = message !== null && typeof message === "object" && !Array.isArray(message);
-    const isResponse = isObject
-      && reservedIds.has(message.id)
-      && typeof message.method !== "string"
-      && (Object.prototype.hasOwnProperty.call(message, "result")
-        || Object.prototype.hasOwnProperty.call(message, "error"));
-    if (isResponse) {
-      const waiter = pending.get(message.id);
-      pending.delete(message.id);
-      reservedIds.delete(message.id);
-      waiter?.resolve(message);
-      return;
-    }
+    if (consumeInternalResponse(message, pending, reservedIds)) return;
     stream.push(Buffer.concat([record, delimiter]));
   });
   child.stdout.pipe(output).pipe(process.stdout);
@@ -439,27 +428,14 @@ async function runProxy(args) {
     try {
       actions = await createDevKitActionServer({
         socketPath: devkitSocketPath,
-        invoke: request => new Promise((resolveAction, rejectAction) => {
+        invoke: (request, { deadlineAt }) => {
           const id = internalRpcId(reservedIds);
           request = { ...request, id };
-          reservedIds.add(id);
-          const timer = setTimeout(() => {
-            pending.delete(id);
-            reservedIds.delete(id);
-            rejectAction(new Error("Browser action timed out"));
-          }, 6_000);
-          pending.set(id, {
-            resolve: message => { clearTimeout(timer); resolveAction(message); },
-            reject: error => { clearTimeout(timer); rejectAction(error); },
+          return invokeInternalRequest({
+            child, request, pending, reservedIds,
+            timeoutMs: Math.max(1, deadlineAt - Date.now()),
           });
-          child.stdin.write(JSON.stringify(request) + "\n", error => {
-            if (!error) return;
-            clearTimeout(timer);
-            pending.delete(id);
-            reservedIds.delete(id);
-            rejectAction(error);
-          });
-        }),
+        },
       });
     } catch (error) {
       await new Promise(resolve => health.server.close(resolve));
