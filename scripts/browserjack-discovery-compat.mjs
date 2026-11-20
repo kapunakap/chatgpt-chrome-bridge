@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -31,7 +31,12 @@ const browserClientUrl = "file:///Applications/ChatGPT.app/Contents/Resources/pl
 const devkitSocketPath = join(homedir(), ".config/chatgpt-browser-bridge/devkit-actions.sock");
 const maxHealthRequestBytes = 64;
 const healthProbeTimeoutMs = 30_000;
-const healthIdPrefix = `__chatgpt_chrome_bridge_health__:${process.pid}:`;
+// Numeric JSON-RPC IDs match the signed BrowserJack live-doctor transport.
+function internalRpcId(ids) {
+  let id;
+  do { id = randomInt(100_000_000, 2_000_000_000); } while (ids.has(id));
+  return id;
+}
 process.umask(0o077);
 
 process.stdout.on("error", (error) => {
@@ -302,7 +307,7 @@ async function createHealthServer({ child, pending, reservedIds }) {
         socket.end(`${JSON.stringify({ ok: false, error: "invalid request" })}\n`);
         return;
       }
-      const id = `${healthIdPrefix}${randomUUID()}`;
+      const id = internalRpcId(reservedIds);
       reservedIds.add(id);
       try {
         const response = await new Promise((resolveProbe, rejectProbe) => {
@@ -435,7 +440,8 @@ async function runProxy(args) {
       actions = await createDevKitActionServer({
         socketPath: devkitSocketPath,
         invoke: request => new Promise((resolveAction, rejectAction) => {
-          const id = request.id;
+          const id = internalRpcId(reservedIds);
+          request = { ...request, id };
           reservedIds.add(id);
           const timer = setTimeout(() => {
             pending.delete(id);
