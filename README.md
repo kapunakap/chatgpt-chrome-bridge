@@ -285,9 +285,9 @@ starts a second BrowserJack process. A separate private Unix socket provides onl
 strictly typed operations: `tabs_list`, `read`, and `navigate` (new tab only).
 There is **no** generic JS, CDP, shell, cookie, password, or raw MCP operation endpoint.
 
-This socket is not a standalone DevKit browser service. A cold service still needs
-the normal hosted MCP initialization described above. The bridge does not inject an
-initialization into an existing hosted session or borrow that session's metadata.
+The default hosted mode still needs the normal hosted MCP initialization described
+above. The separate experimental DevKit-owned mode below initializes its own child
+session. Neither mode borrows another session's metadata.
 
 Actions use a 3.5-second total deadline, including queue time. Queued work is dropped
 when its client disconnects or the deadline passes. A navigation already sent to
@@ -332,3 +332,45 @@ use public HTTPS and cannot contain credentials, query parameters, or fragments.
 browser control surface, threat model and signed runtime compatibility before public
 DevKit distribution. The public DevKit Code app and normal bridge remain independent
 and unchanged. See the DevKit repository issue #23.
+
+### Experimental DevKit-owned session (not live-verified)
+
+An explicit service mode lets DevKit own the existing tunnel-launched BrowserJack
+child. It sends ordinary MCP `initialize`, `notifications/initialized` and
+`tools/list`, then checks the one observed Chrome backend. The browser context is
+pinned for subsequent private-socket actions. It does not start another runtime,
+add a browser profile, or require selecting the separate Local Chrome ChatGPT app.
+The installed bridge, signed ChatGPT browser client, Chrome extension and existing
+OpenAI tunnel service remain dependencies.
+
+The mode reserves the child for DevKit. Hosted Local Chrome requests are rejected
+and never forwarded to it; only the existing bounded health/action sockets can
+reach that child. Startup fails when another wrapper owns the session or an
+existing bridge socket is live. The original fingerprint launcher, supervisor,
+native authorization and per-origin DevKit grants still apply.
+
+After applying and validating this candidate on the intended Mac, the explicit
+mode selection is:
+
+```sh
+BROWSERJACK_DEVKIT_ACTIONS_ENABLED=true \
+BROWSERJACK_DEVKIT_SESSION_OWNER=devkit \
+bash scripts/service.sh install
+```
+
+The existing installer stops the prior service before starting its replacement.
+Do not launch a second daemon. Switching back uses the same command with
+`BROWSERJACK_DEVKIT_SESSION_OWNER=hosted`. The installed plist remembers the mode.
+No session IDs, authentication metadata or credentials are copied from ChatGPT.
+
+Pure lifecycle and ownership tests cover initialization, failure handling,
+exclusive ownership, context selection and metadata isolation. They do not prove
+Mac startup, native authorization, a real page action, or ChatGPT integration.
+Synthetic wrapper fixtures cover handshake order, socket readiness gating,
+hosted input rejection, private output isolation and shutdown with an unfinished
+health connection. Their fake MCP child performs no real browser operation.
+The live doctor, direct smoke, status checks and real DevKit ChatGPT cases remain
+required before treating this mode as working or publishing it. A denied native
+or host action remains a denial; this mode must not be used to retry around it.
+
+Run the existing native checks from a normal Mac Terminal with `node scripts/devkit-native-check.mjs`. It runs the supported doctor, smoke and status checks in sequence, stops on the first failure, and saves the private result to `output/devkit-native-check.json`. It does not install or reconfigure the service. A saved fixture-test result is not native acceptance.

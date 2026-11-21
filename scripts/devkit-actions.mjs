@@ -278,7 +278,12 @@ export function createDevKitActionHandler({ invoke, actionTimeoutMs = ACTION_TIM
 export async function createDevKitActionServer({ socketPath, invoke, actionTimeoutMs = ACTION_TIMEOUT_MS }) {
   const handler = createDevKitActionHandler({ invoke, actionTimeoutMs });
   await safePath(socketPath);
-  const server = createServer({ allowHalfOpen: true }, handler);
+  const clients = new Set();
+  const server = createServer({ allowHalfOpen: true }, socket => {
+    clients.add(socket);
+    socket.once("close", () => clients.delete(socket));
+    handler(socket);
+  });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
@@ -286,6 +291,7 @@ export async function createDevKitActionServer({ socketPath, invoke, actionTimeo
   await chmod(socketPath, 0o600);
   const identity = await lstat(socketPath);
   const close = async () => {
+    for (const socket of clients) socket.destroy();
     await new Promise(resolve => server.close(resolve));
     const current = await lstat(socketPath).catch(() => undefined);
     if (current?.isSocket() && current.dev === identity.dev && current.ino === identity.ino) await unlink(socketPath);

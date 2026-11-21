@@ -67,3 +67,37 @@ The separately opt-in `BROWSERJACK_DEVKIT_ACTIONS_ENABLED=true` LaunchAgent sett
 The socket is accessible to *other processes owned by the same macOS user*. It is **not** a replacement for local OS user isolation. DevKit applies a second security boundary before forwarding requests: a signed-in, device-scoped outbound agent, an explicit local user command granting a named HTTPS origin and access mode, a 15-minute in-memory lease cleared on reconnect, per-tab origin checks before and after reads, and filtering of all ungranted tabs before any response reaches DevKit Cloud. The bridge alone does not store DevKit account IDs or approvals and must not be advertised as a multi-user auth boundary.
 
 Navigation responses are cached by request ID during one bridge process lifetime only. A lost response across a bridge restart is ambiguous and **must not** be retried automatically. The page snapshot is untrusted content; neither browser content nor prompts may escalate a local grant. Avoid sending credentials or private URLs to the bridge, ChatGPT, logs, or issues. This capability is **not approved for public DevKit distribution** solely because its local tests pass.
+
+### Explicit DevKit session ownership
+
+`BROWSERJACK_DEVKIT_SESSION_OWNER=devkit` is a separate experimental service opt-in
+and requires the action-socket opt-in. The same tunnel-owned wrapper launches the
+same verified `browserjack-current.sh` entry point and supervisor. The wrapper
+performs an ordinary MCP handshake as its own client; upstream BrowserJack applies
+its existing per-child metadata. No hosted `_meta`, session/turn IDs, credentials
+or native authorization data enter the owned child. Unsupported client requests
+are denied; no approval or credential interaction is handled automatically.
+
+In this mode all hosted MCP input is rejected or discarded before reaching the
+child, and internal child output is not sent to hosted stdout. The normal hosted
+mode remains the default. Both updated wrapper modes claim a private current-user
+owner file before launching, also refusing any live legacy health/action socket.
+A dead lock is reclaimed only after validating its type, owner, mode, contents and
+dead PID; changing file identity aborts cleanup. A short-lived private exclusive
+claim guard serializes acquisition, recovery and release. An abandoned claim
+guard fails closed and requires explicit inspection; it is not automatically
+deleted. Neither mode stops or replaces a different live owner. Upgrade the
+single managed wrapper in place; do not run old
+and new launchers concurrently.
+
+The owner readiness probe and action helper share one observed Chrome binding.
+An absent or ambiguous browser fails closed. The health result contains only
+readiness booleans, and no local origin permission is granted by initialization.
+Host and native policy failures remain errors. This candidate has pure test
+coverage only until the actual Mac and ChatGPT integration checks pass.
+
+Both private servers track their own active connections and destroy those
+connections during shutdown before releasing the owner. Health request input has
+a bounded one-second deadline. An unfinished half-open client cannot retain the
+wrapper or its owner lock after the child exits. This cleanup never signals or
+closes resources belonging to another bridge owner.
