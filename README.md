@@ -373,4 +373,12 @@ The live doctor, direct smoke, status checks and real DevKit ChatGPT cases remai
 required before treating this mode as working or publishing it. A denied native
 or host action remains a denial; this mode must not be used to retry around it.
 
-Run the existing native checks from a normal Mac Terminal with `node scripts/devkit-native-check.mjs`. It runs the supported doctor, smoke and status checks in sequence, stops on the first failure, and saves the private result to `output/devkit-native-check.json`. It does not install or reconfigure the service. A saved fixture-test result is not native acceptance.
+Run the existing native checks from a normal Mac Terminal with `node scripts/devkit-native-check.mjs`. It runs doctor and smoke from this candidate checkout, then checks the installed service using this checkout by default. When the service was installed from a different checkout, select that known checkout explicitly:
+
+```sh
+node scripts/devkit-native-check.mjs --installed-service-root /absolute/path/to/installed/checkout
+```
+
+Only status runs from the selected installed checkout. Its existing launcher-path and readiness checks remain unchanged; no checkout is inferred from configuration or substituted after a failure. The receipt records each check's root and scope, reports candidate doctor/smoke separately from installed-service status, and records whether the two roots match. Passing status for a different checkout does not show that the candidate is installed or that DevKit-owned actions work.
+
+Checks stop on the first failure and return a nonzero exit code. Every run saves a new private `output/devkit-native-check-<timestamp>-<id>.json` receipt; the original `output/devkit-native-check.json` and earlier receipts are preserved. Only fixed readiness fields and safe failure codes are saved or printed. The checker does not install or reconfigure the service. Passing prerequisites or fixture tests is not full candidate integration acceptance.
