@@ -79,6 +79,14 @@ validate_inputs() {
   [[ -x "$TUNNEL_CLIENT_SHIM" ]] || fail "Tunnel-client launcher not found or not executable: $TUNNEL_CLIENT_SHIM"
   [[ -f "$HEALTH_PROBE" ]] || fail "BrowserJack health probe is missing: $HEALTH_PROBE"
   [[ -f "$HEALTH_SERVICE" ]] || fail "Local Chrome health watcher manager is missing: $HEALTH_SERVICE"
+  case "${BROWSERJACK_DEVKIT_SESSION_OWNER:-hosted}" in
+    hosted) ;;
+    devkit)
+      [[ "${BROWSERJACK_DEVKIT_ACTIONS_ENABLED:-false}" == true ]] || fail "DevKit session ownership requires explicit action-socket opt-in."
+      [[ "$BROWSERJACK_SHIM" == "$REPO_ROOT/scripts/browserjack-discovery-compat.mjs" ]] || fail "DevKit ownership requires the checked-in discovery wrapper."
+      ;;
+    *) fail "BROWSERJACK_DEVKIT_SESSION_OWNER must be hosted or devkit." ;;
+  esac
   "$TUNNEL_CLIENT_SHIM" --version >/dev/null
   [[ "$ALIAS" =~ ^[A-Za-z0-9._-]+$ ]] || fail "Invalid tunnel alias: $ALIAS"
   [[ "$LABEL" =~ ^[A-Za-z0-9.-]+$ ]] || fail "Invalid launch-agent label: $LABEL"
@@ -141,13 +149,20 @@ wait_for_runtime_stop() {
 }
 
 print_startup_status() {
+  local owner_mode=''
+  owner_mode="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:BROWSERJACK_DEVKIT_SESSION_OWNER' "$PLIST_PATH" 2>/dev/null || true)"
   printf 'launch_agent_loaded=true\n'
   printf 'launch_agent_pid_alive=true\n'
   printf 'launch_agent_owns_process=true\n'
   printf 'runtime_process_owner=launchd\n'
   printf 'process_running=true\n'
-  printf 'browser_readiness=pending-hosted-initialize\n'
-  printf 'tunnel_readiness=pending-hosted-initialize\n'
+  if [[ "$owner_mode" == devkit ]]; then
+    printf 'browser_readiness=pending-devkit-initialize\n'
+    printf 'tunnel_readiness=pending-managed-tunnel-check\n'
+  else
+    printf 'browser_readiness=pending-hosted-initialize\n'
+    printf 'tunnel_readiness=pending-hosted-initialize\n'
+  fi
   printf 'startup_ready=true\n'
 }
 
@@ -207,7 +222,8 @@ render_plist() {
     "$STDOUT_LOG" \
     "$STDERR_LOG" \
     "${CHATGPT_APP_PATH:-}" \
-    "${BROWSERJACK_DEVKIT_ACTIONS_ENABLED:-false}" <<'PY'
+    "${BROWSERJACK_DEVKIT_ACTIONS_ENABLED:-false}" \
+    "${BROWSERJACK_DEVKIT_SESSION_OWNER:-hosted}" <<'PY'
 import plistlib
 import sys
 
@@ -223,6 +239,7 @@ import sys
     stderr_log,
     chatgpt_app_path,
     devkit_actions_enabled,
+    devkit_session_owner,
 ) = sys.argv[1:]
 
 environment = {
@@ -234,6 +251,8 @@ if chatgpt_app_path:
     environment["CHATGPT_APP_PATH"] = chatgpt_app_path
 if devkit_actions_enabled == "true":
     environment["BROWSERJACK_DEVKIT_ACTIONS_ENABLED"] = "true"
+if devkit_session_owner == "devkit":
+    environment["BROWSERJACK_DEVKIT_SESSION_OWNER"] = "devkit"
 
 value = {
     "Label": label,

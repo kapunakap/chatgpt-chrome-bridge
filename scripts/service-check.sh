@@ -29,7 +29,7 @@ case "$action" in doctor|smoke|status) ;; *) run_check "$action"; exit 2 ;; esac
 [[ "$(uname -s)" == Darwin ]] || { printf 'This check requires macOS.\n' >&2; exit 1; }
 label="${LOCAL_CHROME_LAUNCH_AGENT_LABEL:-com.kapunakap.chatgpt-chrome-bridge.local-chrome}"
 service_plist="${LOCAL_CHROME_LAUNCH_AGENT_PLIST:-$HOME/Library/LaunchAgents/$label.plist}"
-[[ -f "$service_plist" ]] || { printf 'Local Chrome service is not installed.\n' >&2; exit 1; }
+[[ -f "$service_plist" ]] || { printf 'service_check_failure_code=service_not_installed\n' >&2; exit 1; }
 umask 077
 check_root="$(mktemp -d "${TMPDIR:-/tmp}/local-chrome-service-check.XXXXXX")"
 check_label="$label.check.$$"
@@ -55,7 +55,10 @@ job = {
 with open(pathlib.Path(root) / 'check.plist', 'wb') as f:
     plistlib.dump(job, f)
 PY
-launchctl bootstrap "$domain" "$check_root/check.plist"
+if ! launchctl bootstrap "$domain" "$check_root/check.plist" >"$check_root/bootstrap.output" 2>&1; then
+  printf 'service_check_failure_code=bootstrap_failed\n' >&2
+  exit 1
+fi
 for ((attempt=0; attempt<90; attempt++)); do
   [[ ! -f "$check_root/result" ]] || break
   sleep 1
@@ -65,23 +68,5 @@ check_exit="$(cat "$check_root/result")"
 
 # status.sh includes tunnel bookkeeping and logs. Emit only fixed readiness
 # fields; raw diagnostic output remains private and is removed on exit.
-python3 - "$action" "$check_root/output" "$check_exit" <<'PY'
-import json, pathlib, re, sys
-action, file, code = sys.argv[1:]
-text = pathlib.Path(file).read_text(errors='replace')
-print(f'{action}_exit_code={code}')
-if action == 'doctor':
-    try:
-        report = json.loads(text)
-        print('doctor_ready=' + str(report.get('ready') is True).lower())
-        for check in report.get('checks', []):
-            if re.fullmatch(r'[a-z-]+', check.get('id', '')) and check.get('status') in ['pass', 'warning', 'failure']:
-                print('doctor_' + check['id'].replace('-', '_') + '=' + check['status'])
-    except ValueError:
-        print('doctor_report_unavailable=true')
-else:
-    for line in text.splitlines():
-        if re.fullmatch(r'[a-z_]+=(true|false|[0-9]+)', line) or line == 'example_title=Example Domain':
-            print(line)
-PY
+python3 "$REPO_ROOT/scripts/service-check-report.py" "$action" "$check_root/output" "$check_exit"
 exit "$check_exit"

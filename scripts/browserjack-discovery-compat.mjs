@@ -19,6 +19,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Transform } from "node:stream";
 import { createDevKitActionServer } from "./devkit-actions.mjs";
+import { consumeInternalResponse, invokeInternalRequest } from "./browserjack-internal-rpc.mjs";
+import {
+  claimBridgeSession, fixedDevKitReadinessRequest, initializeDevKitSession,
+  rejectHostedRequest, rejectUnsupportedChildRequest, sessionOwnerMode,
+} from "./devkit-session-owner.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const upstream = process.env.BROWSERJACK_DISCOVERY_UPSTREAM
@@ -294,15 +299,20 @@ function fixedProbeRequest(id) {
   };
 }
 
-async function createHealthServer({ child, pending, reservedIds }) {
+async function createHealthServer({ child, pending, reservedIds, probeRequest = fixedProbeRequest }) {
   await prepareSocketPath(healthSocketPath);
+  const clients = new Set();
   const server = createServer({ allowHalfOpen: true }, (socket) => {
+    clients.add(socket);
+    const inputTimer = setTimeout(() => socket.destroy(), 1_000);
+    socket.once("close", () => { clearTimeout(inputTimer); clients.delete(socket); });
     let request = Buffer.alloc(0);
     socket.on("data", (chunk) => {
       request = Buffer.concat([request, chunk]);
       if (request.length > maxHealthRequestBytes) socket.destroy();
     });
     socket.once("end", async () => {
+      clearTimeout(inputTimer);
       if (request.toString("utf8").trim() !== '{"op":"probe"}') {
         socket.end(`${JSON.stringify({ ok: false, error: "invalid request" })}\n`);
         return;
@@ -325,7 +335,7 @@ async function createHealthServer({ child, pending, reservedIds }) {
               rejectProbe(error);
             },
           });
-          child.stdin.write(`${JSON.stringify(fixedProbeRequest(id))}\n`, (error) => {
+          child.stdin.write(`${JSON.stringify(probeRequest(id))}\n`, (error) => {
             if (!error) return;
             clearTimeout(timer);
             pending.delete(id);
@@ -347,7 +357,10 @@ async function createHealthServer({ child, pending, reservedIds }) {
   });
   await chmod(healthSocketPath, 0o600);
   const identity = await lstat(healthSocketPath);
-  return { server, identity };
+  return { server, identity, close: async () => {
+    for (const socket of clients) socket.destroy();
+    await new Promise(resolveClose => server.close(resolveClose));
+  } };
 }
 
 function removeOwnedSocket(identity) {
@@ -363,7 +376,7 @@ function removeOwnedSocket(identity) {
   }
 }
 
-async function runProxy(args) {
+async function runProxySession(args, mode) {
   const child = spawn(upstream, args, {
     cwd: repoRoot,
     env: process.env,
@@ -381,9 +394,21 @@ async function runProxy(args) {
 
   const pending = new Map();
   const reservedIds = new Set();
+  void childDone.then(result => {
+    for (const waiter of pending.values()) waiter.reject(result.error ?? Error("BrowserJack exited"));
+    pending.clear(); reservedIds.clear();
+    process.stdin.unpipe(input);
+    input.unpipe(child.stdin);
+    process.stdin.pause();
+  });
   let sequence = 0;
   const input = new LineTransform((record, delimiter, stream) => {
     const message = parseRecord(record);
+    if (mode === "devkit") {
+      const rejected = rejectHostedRequest(message);
+      if (rejected) process.stdout.write(`${JSON.stringify(rejected)}\n`);
+      return; // No hosted payload, including _meta, enters this owned child.
+    }
     if (message === null || Array.isArray(message) || typeof message !== "object") {
       stream.push(Buffer.concat([record, delimiter]));
       return;
@@ -410,28 +435,40 @@ async function runProxy(args) {
 
   const output = new LineTransform((record, delimiter, stream) => {
     const message = parseRecord(record);
-    const isObject = message !== null && typeof message === "object" && !Array.isArray(message);
-    const isResponse = isObject
-      && reservedIds.has(message.id)
-      && typeof message.method !== "string"
-      && (Object.prototype.hasOwnProperty.call(message, "result")
-        || Object.prototype.hasOwnProperty.call(message, "error"));
-    if (isResponse) {
-      const waiter = pending.get(message.id);
-      pending.delete(message.id);
-      reservedIds.delete(message.id);
-      waiter?.resolve(message);
-      return;
+    if (consumeInternalResponse(message, pending, reservedIds)) return;
+    if (mode === "devkit") {
+      const rejected = rejectUnsupportedChildRequest(message);
+      if (rejected) child.stdin.write(`${JSON.stringify(rejected)}\n`);
+      return; // Internal results and unsolicited notifications stay private.
     }
     stream.push(Buffer.concat([record, delimiter]));
   });
   child.stdout.pipe(output).pipe(process.stdout);
 
+  if (mode === "devkit") {
+    try {
+      await initializeDevKitSession({
+        requestId: () => internalRpcId(reservedIds),
+        invoke: (request, timeoutMs) => invokeInternalRequest({ child, request, pending, reservedIds, timeoutMs }),
+        notify: message => new Promise((resolveWrite, rejectWrite) => {
+          child.stdin.write(`${JSON.stringify(message)}\n`, error => error ? rejectWrite(error) : resolveWrite());
+        }),
+      });
+    } catch (error) {
+      child.kill("SIGTERM");
+      await childDone;
+      throw error;
+    }
+  }
+
   let health;
   try {
-    health = await createHealthServer({ child, pending, reservedIds });
+    health = await createHealthServer({ child, pending, reservedIds,
+      ...(mode === "devkit" ? { probeRequest: fixedDevKitReadinessRequest } : {}),
+    });
   } catch (error) {
     child.kill("SIGTERM");
+    await childDone;
     throw error;
   }
   let actions;
@@ -439,35 +476,24 @@ async function runProxy(args) {
     try {
       actions = await createDevKitActionServer({
         socketPath: devkitSocketPath,
-        invoke: request => new Promise((resolveAction, rejectAction) => {
+        invoke: (request, { deadlineAt }) => {
           const id = internalRpcId(reservedIds);
           request = { ...request, id };
-          reservedIds.add(id);
-          const timer = setTimeout(() => {
-            pending.delete(id);
-            reservedIds.delete(id);
-            rejectAction(new Error("Browser action timed out"));
-          }, 6_000);
-          pending.set(id, {
-            resolve: message => { clearTimeout(timer); resolveAction(message); },
-            reject: error => { clearTimeout(timer); rejectAction(error); },
+          return invokeInternalRequest({
+            child, request, pending, reservedIds,
+            timeoutMs: Math.max(1, deadlineAt - Date.now()),
           });
-          child.stdin.write(JSON.stringify(request) + "\n", error => {
-            if (!error) return;
-            clearTimeout(timer);
-            pending.delete(id);
-            reservedIds.delete(id);
-            rejectAction(error);
-          });
-        }),
+        },
       });
     } catch (error) {
-      await new Promise(resolve => health.server.close(resolve));
+      await health.close();
       removeOwnedSocket(health.identity);
       child.kill("SIGTERM");
+      await childDone;
       throw error;
     }
   }
+  if (mode === "devkit") process.stderr.write("browserjack_devkit_owner ready=true\n");
   process.once("exit", () => removeOwnedSocket(health.identity));
   const result = await childDone;
   for (const waiter of pending.values()) {
@@ -476,7 +502,7 @@ async function runProxy(args) {
   pending.clear();
   reservedIds.clear();
   await actions?.close();
-  await new Promise((resolveClose) => health.server.close(resolveClose));
+  await health.close();
   removeOwnedSocket(health.identity);
   if (result.error) {
     process.stderr.write(`browserjack_discovery_compat spawn_error=${JSON.stringify(result.error.message)}\n`);
@@ -484,6 +510,20 @@ async function runProxy(args) {
     return;
   }
   process.exitCode = exitCode(result.code, result.signal);
+}
+
+async function runProxy(args) {
+  const mode = sessionOwnerMode(process.env);
+  // The exclusive mode always uses the existing verified launcher/supervisor.
+  if (mode === "devkit" && upstream !== resolve(repoRoot, "scripts/browserjack-current.sh")) {
+    throw Error("DEVKIT_OWNER_REQUIRES_VERIFIED_LAUNCHER");
+  }
+  const release = await claimBridgeSession({
+    path: join(dirname(healthSocketPath), "browserjack-session-owner.lock"), mode,
+    socketPaths: [healthSocketPath, ...(process.env.BROWSERJACK_DEVKIT_ACTIONS_ENABLED === "true" ? [devkitSocketPath] : [])],
+  });
+  try { await runProxySession(args, mode); }
+  finally { await release(); }
 }
 
 const args = process.argv.slice(2);

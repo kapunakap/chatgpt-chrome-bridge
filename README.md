@@ -285,6 +285,21 @@ starts a second BrowserJack process. A separate private Unix socket provides onl
 strictly typed operations: `tabs_list`, `read`, and `navigate` (new tab only).
 There is **no** generic JS, CDP, shell, cookie, password, or raw MCP operation endpoint.
 
+The default hosted mode still needs the normal hosted MCP initialization described
+above. The separate experimental DevKit-owned mode below initializes its own child
+session. Neither mode borrows another session's metadata.
+
+Actions use a 3.5-second total deadline, including queue time. Queued work is dropped
+when its client disconnects or the deadline passes. A navigation already sent to
+Chrome can finish after its caller times out; that result is reported as unknown,
+and the same request ID never starts navigation again. The bridge retains at most
+100 navigation request IDs per process and rejects further new IDs rather than
+evicting an uncertain write. Late internal responses stay on the private route.
+
+Tab listing uses fresh user-tab observations and filters them locally to granted
+origins. A read claims only the exact selected, matching user tab. The browser
+binding stays fixed; an ambiguous browser choice fails until the user resolves it.
+
 This integration is disabled by default. To allow the socket when installing the
 per-user LaunchAgent, explicitly run from this checkout:
 
@@ -317,3 +332,53 @@ use public HTTPS and cannot contain credentials, query parameters, or fragments.
 browser control surface, threat model and signed runtime compatibility before public
 DevKit distribution. The public DevKit Code app and normal bridge remain independent
 and unchanged. See the DevKit repository issue #23.
+
+### Experimental DevKit-owned session (not live-verified)
+
+An explicit service mode lets DevKit own the existing tunnel-launched BrowserJack
+child. It sends ordinary MCP `initialize`, `notifications/initialized` and
+`tools/list`, then checks the one observed Chrome backend. The browser context is
+pinned for subsequent private-socket actions. It does not start another runtime,
+add a browser profile, or require selecting the separate Local Chrome ChatGPT app.
+The installed bridge, signed ChatGPT browser client, Chrome extension and existing
+OpenAI tunnel service remain dependencies.
+
+The mode reserves the child for DevKit. Hosted Local Chrome requests are rejected
+and never forwarded to it; only the existing bounded health/action sockets can
+reach that child. Startup fails when another wrapper owns the session or an
+existing bridge socket is live. The original fingerprint launcher, supervisor,
+native authorization and per-origin DevKit grants still apply.
+
+After applying and validating this candidate on the intended Mac, the explicit
+mode selection is:
+
+```sh
+BROWSERJACK_DEVKIT_ACTIONS_ENABLED=true \
+BROWSERJACK_DEVKIT_SESSION_OWNER=devkit \
+bash scripts/service.sh install
+```
+
+The existing installer stops the prior service before starting its replacement.
+Do not launch a second daemon. Switching back uses the same command with
+`BROWSERJACK_DEVKIT_SESSION_OWNER=hosted`. The installed plist remembers the mode.
+No session IDs, authentication metadata or credentials are copied from ChatGPT.
+
+Pure lifecycle and ownership tests cover initialization, failure handling,
+exclusive ownership, context selection and metadata isolation. They do not prove
+Mac startup, native authorization, a real page action, or ChatGPT integration.
+Synthetic wrapper fixtures cover handshake order, socket readiness gating,
+hosted input rejection, private output isolation and shutdown with an unfinished
+health connection. Their fake MCP child performs no real browser operation.
+The live doctor, direct smoke, status checks and real DevKit ChatGPT cases remain
+required before treating this mode as working or publishing it. A denied native
+or host action remains a denial; this mode must not be used to retry around it.
+
+Run the existing native checks from a normal Mac Terminal with `node scripts/devkit-native-check.mjs`. It runs doctor and smoke from this candidate checkout, then checks the installed service using this checkout by default. When the service was installed from a different checkout, select that known checkout explicitly:
+
+```sh
+node scripts/devkit-native-check.mjs --installed-service-root /absolute/path/to/installed/checkout
+```
+
+Only status runs from the selected installed checkout. Its existing launcher-path and readiness checks remain unchanged; no checkout is inferred from configuration or substituted after a failure. The receipt records each check's root and scope, reports candidate doctor/smoke separately from installed-service status, and records whether the two roots match. Passing status for a different checkout does not show that the candidate is installed or that DevKit-owned actions work.
+
+Checks stop on the first failure and return a nonzero exit code. Every run saves a new private `output/devkit-native-check-<timestamp>-<id>.json` receipt; the original `output/devkit-native-check.json` and earlier receipts are preserved. Only fixed readiness fields and safe failure codes are saved or printed. The checker does not install or reconfigure the service. Passing prerequisites or fixture tests is not full candidate integration acceptance.
